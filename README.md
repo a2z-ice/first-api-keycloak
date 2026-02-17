@@ -326,6 +326,79 @@ npx playwright show-report
 | `dark-mode.spec.ts` | 3 | Toggle, localStorage persistence, CSS |
 | **Total** | **45** | |
 
+### Fail-Screenshot Demo (Verifying Screenshot Capture on Failure)
+
+A separate, isolated test that **deliberately fails** to verify Playwright captures screenshots when a test fails. This is useful for confirming that your CI/CD pipeline and HTML reports will include failure screenshots for debugging.
+
+**Why this exists:** The main test suite's Playwright config has `screenshot` set to the default (`off`). This demo uses its own config with `screenshot: 'only-on-failure'` to prove the screenshot mechanism works end-to-end.
+
+#### How It Works
+
+1. The test navigates to the app's login page
+2. It asserts that a **non-existent element** (`h1` with text "This Element Does Not Exist") is visible
+3. The assertion times out after 5 seconds and **fails**
+4. Playwright captures a screenshot of the browser at the moment of failure
+5. The script verifies the `.png` screenshot file exists
+
+#### Run the Demo
+
+```bash
+# Run with default APP_URL (http://localhost:30000)
+./scripts/test-fail-screenshot.sh
+
+# Run with a custom URL
+APP_URL=http://localhost:30000 ./scripts/test-fail-screenshot.sh
+```
+
+**Script output (4 steps):**
+
+| Step | What It Does |
+|------|-------------|
+| 1. Health check | Verifies `$APP_URL/api/health` is reachable |
+| 2. Clean artifacts | Removes previous `playwright-fail-demo-report/` and `test-results/` |
+| 3. Run failing test | Executes the test, expects exit code ≠ 0 |
+| 4. Verify screenshot | Confirms at least one `.png` exists in `test-results/` |
+
+#### Where to Find the Results
+
+| Artifact | Location |
+|----------|----------|
+| Screenshot file | `frontend/test-results/fail-demo-*/test-failed-1.png` |
+| HTML report | `frontend/playwright-fail-demo-report/index.html` |
+
+#### View the HTML Report
+
+The HTML report contains the failure details **with the screenshot embedded inline**:
+
+```bash
+cd frontend && npx playwright show-report playwright-fail-demo-report
+```
+
+This opens a local server (e.g., `http://localhost:9323`) in your browser. You'll see:
+- The test name and failure message
+- The exact line of code that failed
+- The **screenshot** showing what the browser displayed at failure time
+- An error context section with the assertion details
+
+#### Isolation from Main Test Suite
+
+This demo is completely separate from the main 45 E2E tests:
+
+| | Main Test Suite | Fail-Screenshot Demo |
+|---|---|---|
+| **Config** | `playwright.config.ts` | `playwright-fail-demo.config.ts` |
+| **Test dir** | `tests/e2e/` | `tests/e2e-fail-demo/` |
+| **Report dir** | `playwright-report/` | `playwright-fail-demo-report/` |
+| **Screenshot** | `off` (default) | `only-on-failure` |
+| **Test count** | 45 | 1 |
+| **Expected result** | All pass | 1 failure (intentional) |
+
+> **Note:** Running `npx playwright test` (the normal test command) will **not** pick up the fail-demo test, because the main config points to `tests/e2e/` only.
+
+#### Plan Document
+
+For full implementation details, see [`plans/4-playwright-fail-screenshot-demo.md`](plans/4-playwright-fail-screenshot-demo.md).
+
 ---
 
 ## Local Development
@@ -411,9 +484,11 @@ keycloak/
 │   │       ├── students/             # List, Detail, Form
 │   │       └── departments/          # List, Detail, Form
 │   ├── tests/e2e/                    # Playwright test suites (45 tests)
+│   ├── tests/e2e-fail-demo/         # Fail-screenshot demo (isolated, 1 test)
 │   ├── nginx.conf                    # Production: /api proxy + SPA fallback
 │   ├── Dockerfile                    # Multi-stage: node build → nginx
-│   ├── playwright.config.ts          # Test configuration
+│   ├── playwright.config.ts          # Test configuration (main suite)
+│   ├── playwright-fail-demo.config.ts # Fail-demo config (screenshot: only-on-failure)
 │   ├── vite.config.ts                # Dev proxy: /api → localhost:8000
 │   └── package.json                  # React 19, Vite 6, Playwright
 │
@@ -441,13 +516,15 @@ keycloak/
 │   ├── deploy-and-test.sh            # Alternative deploy pipeline
 │   ├── run-tests.sh                  # Test runner with options
 │   ├── create-test-data.py           # Seed departments + students
+│   ├── test-fail-screenshot.sh       # Fail-screenshot demo runner
 │   ├── wait-for-keycloak.sh          # Poll Keycloak readiness
 │   └── verify-deployment.sh          # Check deployment health
 │
 ├── plans/                            # Implementation plan documents
 │   ├── 1-keycloak-oauth21-student-mgmt.md
 │   ├── 2-multi-replica-deploy-auth-refactor.md
-│   └── 3-react-frontend-bff-migration.md
+│   ├── 3-react-frontend-bff-migration.md
+│   └── 4-playwright-fail-screenshot-demo.md
 │
 └── skills/
     └── README.md                     # Technology & pattern catalog
@@ -700,6 +777,7 @@ pip install -r requirements.txt
 | `setup.sh` | Create cluster + Keycloak + environments | `./setup.sh` |
 | `cleanup.sh` | Delete cluster + all artifacts | `./cleanup.sh` |
 | `scripts/run-tests.sh` | Test runner with flags | `./scripts/run-tests.sh --deployed` |
+| `scripts/test-fail-screenshot.sh` | Fail-screenshot demo: runs a failing test, verifies screenshot capture | `./scripts/test-fail-screenshot.sh` |
 | `scripts/verify-deployment.sh` | Check deployment health | `./scripts/verify-deployment.sh` |
 
 

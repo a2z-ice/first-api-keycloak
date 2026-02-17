@@ -18,6 +18,7 @@ backend/.env
 frontend/node_modules/
 frontend/dist/
 frontend/playwright-report/
+frontend/playwright-fail-demo-report/
 frontend/test-results/
 
 # IDE

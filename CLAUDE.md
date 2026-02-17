@@ -45,6 +45,9 @@ cd frontend && npx playwright test --reporter=html
 
 # Verify Keycloak deployment
 ./scripts/verify-deployment.sh
+
+# Run fail-screenshot demo (verifies Playwright captures screenshots on failure)
+./scripts/test-fail-screenshot.sh
 ```
 
 **Prerequisites:** `127.0.0.1 idp.keycloak.com` must be in `/etc/hosts`. Requires kind, kubectl, docker, python3, node/npm, and Playwright browsers (`npx playwright install`).
@@ -119,6 +122,10 @@ Keycloak (NodePort 31111)
 
 Test files: `auth.spec.ts`, `students.spec.ts`, `departments.spec.ts`, `navigation.spec.ts`, `validation.spec.ts`, `errors.spec.ts`, `dark-mode.spec.ts`.
 
+### Fail-Screenshot Demo (`frontend/tests/e2e-fail-demo/`)
+
+Isolated test that deliberately fails to verify Playwright captures screenshots on failure. Uses a separate config (`playwright-fail-demo.config.ts`) with `screenshot: 'only-on-failure'`. Run with `./scripts/test-fail-screenshot.sh`. Report at `frontend/playwright-fail-demo-report/index.html`. Auto-generated artifacts (`playwright-fail-demo-report/`, `test-results/`) are git-ignored. See `plans/4-playwright-fail-screenshot-demo.md` for details.
+
 ## Key URLs and Credentials
 
 | Service | URL |
@@ -166,6 +173,7 @@ Test users: `admin-user`/`admin123` (admin), `student-user`/`student123` (studen
 - **`scripts/deploy-and-test.sh`** — Alternative deploy pipeline with flags: `--skip-build`, `--only-deploy`, `--only-test-deployed`
 - **`scripts/run-tests.sh`** — Reusable Playwright test runner. Flags: `--deployed`, `--local`, `--start-app`, `--filter`
 - **`scripts/create-test-data.py`** — Seeds departments + students (idempotent)
+- **`scripts/test-fail-screenshot.sh`** — Runs a deliberately-failing test to verify Playwright screenshot capture on failure
 
 ### Key Deployment Details
 
