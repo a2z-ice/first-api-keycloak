@@ -1,4 +1,4 @@
---- Student Management System ---
+# Student Management System
 
 
 OAuth2.1-secured Student Management System with **Keycloak** as the identity provider, a **React 19** single-page application frontend, and a **FastAPI** JSON API backend — all deployed in a **Kind** (Kubernetes-in-Docker) cluster.
@@ -701,3 +701,18 @@ pip install -r requirements.txt
 | `cleanup.sh` | Delete cluster + all artifacts | `./cleanup.sh` |
 | `scripts/run-tests.sh` | Test runner with flags | `./scripts/run-tests.sh --deployed` |
 | `scripts/verify-deployment.sh` | Check deployment health | `./scripts/verify-deployment.sh` |
+
+
+<script type="module">
+  import mermaid from 'https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs';
+  mermaid.initialize({ startOnLoad: true });
+  
+  // This part forces Jekyll's "language-mermaid" blocks to render
+  const codeBlocks = document.querySelectorAll('.language-mermaid');
+  codeBlocks.forEach(block => {
+    const pre = document.createElement('pre');
+    pre.className = 'mermaid';
+    pre.textContent = block.textContent;
+    block.parentElement.replaceWith(pre);
+  });
+</script>
