@@ -1,4 +1,5 @@
-# Student Management System
+--- Student Management System ---
+
 
 OAuth2.1-secured Student Management System with **Keycloak** as the identity provider, a **React 19** single-page application frontend, and a **FastAPI** JSON API backend — all deployed in a **Kind** (Kubernetes-in-Docker) cluster.
 
