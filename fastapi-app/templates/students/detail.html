@@ -1,0 +1,33 @@
+{% extends "base.html" %}
+
+{% block title %}{{ student.name }} - Student Management{% endblock %}
+
+{% block content %}
+<div class="page-header">
+    <h1>{{ student.name }}</h1>
+    {% if 'admin' in roles %}
+    <a href="/students/{{ student.id }}/edit" class="btn btn-primary">Edit</a>
+    {% endif %}
+</div>
+
+<div class="detail-card">
+    <dl>
+        <dt>ID</dt>
+        <dd>{{ student.id }}</dd>
+
+        <dt>Name</dt>
+        <dd>{{ student.name }}</dd>
+
+        <dt>Email</dt>
+        <dd>{{ student.email }}</dd>
+
+        <dt>Keycloak User ID</dt>
+        <dd>{{ student.keycloak_user_id or '-' }}</dd>
+
+        <dt>Department</dt>
+        <dd>{{ student.department.name if student.department else '-' }}</dd>
+    </dl>
+</div>
+
+<a href="/students/" class="btn btn-outline">Back to Students</a>
+{% endblock %}

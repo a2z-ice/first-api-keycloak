@@ -1,0 +1,65 @@
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: keycloak
+  namespace: keycloak
+  labels:
+    app: keycloak
+spec:
+  replicas: 3
+  serviceName: keycloak-headless
+  selector:
+    matchLabels:
+      app: keycloak
+  template:
+    metadata:
+      labels:
+        app: keycloak
+    spec:
+      containers:
+        - name: keycloak
+          image: quay.io/keycloak/keycloak:26.5.3
+          args: ["start"]
+          ports:
+            - containerPort: 8443
+              name: https
+              protocol: TCP
+            - containerPort: 9000
+              name: management
+              protocol: TCP
+          envFrom:
+            - configMapRef:
+                name: keycloak-config
+            - secretRef:
+                name: keycloak-secret
+          readinessProbe:
+            httpGet:
+              path: /health/ready
+              port: 9000
+              scheme: HTTPS
+            initialDelaySeconds: 30
+            periodSeconds: 10
+            failureThreshold: 10
+          livenessProbe:
+            httpGet:
+              path: /health/live
+              port: 9000
+              scheme: HTTPS
+            initialDelaySeconds: 60
+            periodSeconds: 15
+            failureThreshold: 10
+          volumeMounts:
+            - name: tls-certs
+              mountPath: /opt/keycloak/certs
+              readOnly: true
+          resources:
+            requests:
+              memory: "512Mi"
+              cpu: "500m"
+            limits:
+              memory: "1Gi"
+              cpu: "1"
+      volumes:
+        - name: tls-certs
+          secret:
+            secretName: keycloak-tls

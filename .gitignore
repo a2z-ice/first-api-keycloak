@@ -1,0 +1,26 @@
+# Certificates
+certs/*.crt
+certs/*.key
+certs/*.csr
+certs/*.srl
+
+# Python
+fastapi-app/venv/
+fastapi-app/__pycache__/
+fastapi-app/app/__pycache__/
+fastapi-app/app/routes/__pycache__/
+*.pyc
+*.pyo
+*.db
+
+# Environment
+fastapi-app/.env
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store

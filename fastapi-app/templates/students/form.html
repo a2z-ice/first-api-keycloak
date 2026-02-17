@@ -1,0 +1,43 @@
+{% extends "base.html" %}
+
+{% block title %}{{ 'Edit' if student else 'New' }} Student - Student Management{% endblock %}
+
+{% block content %}
+<h1>{{ 'Edit' if student else 'New' }} Student</h1>
+
+<form method="POST" class="form-card">
+    <div class="form-group">
+        <label for="name">Name</label>
+        <input type="text" id="name" name="name" value="{{ student.name if student else '' }}" required>
+    </div>
+
+    <div class="form-group">
+        <label for="email">Email</label>
+        <input type="email" id="email" name="email" value="{{ student.email if student else '' }}" required>
+    </div>
+
+    <div class="form-group">
+        <label for="keycloak_user_id">Keycloak User ID</label>
+        <input type="text" id="keycloak_user_id" name="keycloak_user_id"
+               value="{{ student.keycloak_user_id if student and student.keycloak_user_id else '' }}">
+    </div>
+
+    <div class="form-group">
+        <label for="department_id">Department</label>
+        <select id="department_id" name="department_id">
+            <option value="">-- Select Department --</option>
+            {% for dept in departments %}
+            <option value="{{ dept.id }}"
+                    {{ 'selected' if student and student.department_id == dept.id else '' }}>
+                {{ dept.name }}
+            </option>
+            {% endfor %}
+        </select>
+    </div>
+
+    <div class="form-actions">
+        <button type="submit" class="btn btn-primary">{{ 'Update' if student else 'Create' }}</button>
+        <a href="/students/" class="btn btn-outline">Cancel</a>
+    </div>
+</form>
+{% endblock %}

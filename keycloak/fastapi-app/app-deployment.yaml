@@ -1,0 +1,76 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: fastapi-app
+  namespace: keycloak
+  labels:
+    app: fastapi-app
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: fastapi-app
+  template:
+    metadata:
+      labels:
+        app: fastapi-app
+    spec:
+      hostAliases:
+        - ip: __NODE_IP__
+          hostnames:
+            - idp.keycloak.com
+      initContainers:
+        - name: init-db
+          image: fastapi-student-app:latest
+          imagePullPolicy: Never
+          command: ["python", "-c", "from app.database import init_db; init_db()"]
+          envFrom:
+            - configMapRef:
+                name: fastapi-app-config
+            - secretRef:
+                name: fastapi-app-secret
+          volumeMounts:
+            - name: keycloak-ca
+              mountPath: /etc/ssl/keycloak
+              readOnly: true
+      containers:
+        - name: fastapi-app
+          image: fastapi-student-app:latest
+          imagePullPolicy: Never
+          ports:
+            - containerPort: 8000
+          envFrom:
+            - configMapRef:
+                name: fastapi-app-config
+            - secretRef:
+                name: fastapi-app-secret
+          volumeMounts:
+            - name: keycloak-ca
+              mountPath: /etc/ssl/keycloak
+              readOnly: true
+          readinessProbe:
+            httpGet:
+              path: /login-page
+              port: 8000
+            initialDelaySeconds: 5
+            periodSeconds: 5
+          livenessProbe:
+            httpGet:
+              path: /login-page
+              port: 8000
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          resources:
+            requests:
+              memory: "128Mi"
+              cpu: "100m"
+            limits:
+              memory: "256Mi"
+              cpu: "500m"
+      volumes:
+        - name: keycloak-ca
+          secret:
+            secretName: keycloak-tls
+            items:
+              - key: ca.crt
+                path: ca.crt
