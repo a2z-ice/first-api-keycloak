@@ -50,13 +50,13 @@ spec:
               readOnly: true
           readinessProbe:
             httpGet:
-              path: /login-page
+              path: /api/health
               port: 8000
             initialDelaySeconds: 5
             periodSeconds: 5
           livenessProbe:
             httpGet:
-              path: /login-page
+              path: /api/health
               port: 8000
             initialDelaySeconds: 10
             periodSeconds: 10

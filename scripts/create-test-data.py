@@ -7,7 +7,7 @@ import sys
 
 import httpx
 
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "fastapi-app"))
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "backend"))
 
 from app.database import init_db, SessionLocal
 from app.models import Department, Student

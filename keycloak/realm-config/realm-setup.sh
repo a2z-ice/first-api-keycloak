@@ -55,11 +55,11 @@ curl -sk -X POST "${KEYCLOAK_URL}/admin/realms/${REALM}/clients" \
     \"directAccessGrantsEnabled\": false,
     \"serviceAccountsEnabled\": false,
     \"authorizationServicesEnabled\": false,
-    \"redirectUris\": [\"http://localhost:8000/callback\", \"http://localhost:32000/callback\"],
-    \"webOrigins\": [\"http://localhost:8000\", \"http://localhost:32000\"],
+    \"redirectUris\": [\"http://localhost:8000/api/auth/callback\", \"http://localhost:30000/api/auth/callback\", \"http://localhost:5173/api/auth/callback\"],
+    \"webOrigins\": [\"http://localhost:8000\", \"http://localhost:30000\", \"http://localhost:5173\"],
     \"attributes\": {
       \"pkce.code.challenge.method\": \"S256\",
-      \"post.logout.redirect.uris\": \"http://localhost:8000/login-page##http://localhost:32000/login-page\"
+      \"post.logout.redirect.uris\": \"http://localhost:30000/login##http://localhost:5173/login##http://localhost:8000/login\"
     }
   }" || echo "    Client may already exist"
 

@@ -21,15 +21,26 @@ rm -f "$PROJECT_DIR/certs/tls.crt" "$PROJECT_DIR/certs/tls.key"
 rm -f "$PROJECT_DIR/certs/tls.csr" "$PROJECT_DIR/certs/ca.srl"
 
 # Remove SQLite database
-rm -f "$PROJECT_DIR/fastapi-app/students.db"
+rm -f "$PROJECT_DIR/backend/students.db"
 
 # Remove Docker build artifacts
-rm -rf "$PROJECT_DIR/fastapi-app/certs"
+rm -rf "$PROJECT_DIR/backend/certs"
 
 # Remove Python venv
-if [ -d "$PROJECT_DIR/fastapi-app/venv" ]; then
+if [ -d "$PROJECT_DIR/backend/venv" ]; then
     echo "    Removing Python virtual environment..."
-    rm -rf "$PROJECT_DIR/fastapi-app/venv"
+    rm -rf "$PROJECT_DIR/backend/venv"
 fi
+
+# Remove frontend node_modules
+if [ -d "$PROJECT_DIR/frontend/node_modules" ]; then
+    echo "    Removing frontend node_modules..."
+    rm -rf "$PROJECT_DIR/frontend/node_modules"
+fi
+
+# Remove frontend build artifacts
+rm -rf "$PROJECT_DIR/frontend/dist"
+rm -rf "$PROJECT_DIR/frontend/playwright-report"
+rm -rf "$PROJECT_DIR/frontend/test-results"
 
 echo "==> Cleanup complete!"

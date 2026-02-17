@@ -67,7 +67,7 @@ echo ""
 
 # ---- Step 8: Setup Python Virtual Environment ----
 echo "==> Step 8: Setting up Python environment..."
-cd "$PROJECT_DIR/fastapi-app"
+cd "$PROJECT_DIR/backend"
 
 if [ ! -d "venv" ]; then
     python3 -m venv venv
@@ -78,8 +78,14 @@ echo ""
 
 # ---- Step 9: Initialize Database & Seed Data ----
 echo "==> Step 9: Initializing database and seeding data..."
-cd "$PROJECT_DIR/fastapi-app"
+cd "$PROJECT_DIR/backend"
 python3 "$PROJECT_DIR/scripts/create-test-data.py"
+echo ""
+
+# ---- Step 10: Setup Frontend ----
+echo "==> Step 10: Setting up frontend..."
+cd "$PROJECT_DIR/frontend"
+npm ci
 echo ""
 
 echo "============================================"
@@ -89,12 +95,13 @@ echo ""
 echo " Keycloak:  https://idp.keycloak.com:31111"
 echo " Admin:     admin / admin"
 echo ""
-echo " To start the FastAPI app:"
-echo "   cd fastapi-app"
-echo "   source venv/bin/activate"
-echo "   python run.py"
+echo " To start the backend:"
+echo "   cd backend && source venv/bin/activate && python run.py"
 echo ""
-echo " Then open: http://localhost:8000"
+echo " To start the frontend (dev):"
+echo "   cd frontend && npm run dev"
+echo ""
+echo " Then open: http://localhost:5173"
 echo ""
 echo " Make sure '127.0.0.1 idp.keycloak.com' is in /etc/hosts"
 echo "============================================"

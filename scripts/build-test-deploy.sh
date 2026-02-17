@@ -4,13 +4,13 @@ set -euo pipefail
 ###############################################################################
 # build-test-deploy.sh
 #
-# All-in-one script: build, test locally, deploy to Kind, test deployed.
+# All-in-one script: build, deploy to Kind, test deployed (React frontend).
 #
 # Prerequisites:
 #   - Kind cluster "keycloak-cluster" running with Keycloak deployed
 #   - 127.0.0.1 idp.keycloak.com in /etc/hosts
-#   - Docker, kind, kubectl, python3 installed
-#   - Playwright browsers installed (playwright install)
+#   - Docker, kind, kubectl, python3, node/npm installed
+#   - Playwright browsers installed (npx playwright install)
 #
 # Usage:
 #   ./scripts/build-test-deploy.sh                # Full pipeline
@@ -21,13 +21,13 @@ set -euo pipefail
 
 PROJECT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 CLUSTER_NAME="keycloak-cluster"
-IMAGE_NAME="fastapi-student-app:latest"
+BACKEND_IMAGE="fastapi-student-app:latest"
+FRONTEND_IMAGE="frontend-student-app:latest"
 KEYCLOAK_URL="https://idp.keycloak.com:31111"
 REALM="student-mgmt"
 CLIENT_ID="student-app"
-DEPLOYED_PORT=32000
+DEPLOYED_PORT=30000
 LOCAL_PORT=8000
-REDIS_CONTAINER="redis-local"
 
 SKIP_LOCAL=false
 DEPLOY_ONLY=false
@@ -54,18 +54,18 @@ done
 cleanup() {
   echo ""
   echo "==> Cleaning up background processes..."
-  pkill -f "port-forward.*fastapi-app.*${DEPLOYED_PORT}" 2>/dev/null || true
-  # Only stop local app/redis if we started them
+  pkill -f "port-forward.*fastapi-app" 2>/dev/null || true
+  pkill -f "port-forward.*frontend-app" 2>/dev/null || true
   if [ "$SKIP_LOCAL" = false ] && [ "$TEST_ONLY" = false ]; then
     pkill -f "uvicorn app.main:app" 2>/dev/null || true
-    docker stop "$REDIS_CONTAINER" 2>/dev/null || true
-    docker rm "$REDIS_CONTAINER" 2>/dev/null || true
+    docker stop redis-local 2>/dev/null || true
+    docker rm redis-local 2>/dev/null || true
   fi
 }
 trap cleanup EXIT
 
 activate_venv() {
-  cd "$PROJECT_DIR/fastapi-app"
+  cd "$PROJECT_DIR/backend"
   if [ -d "venv" ]; then
     source venv/bin/activate
   fi
@@ -77,7 +77,7 @@ wait_for_url() {
   local max_wait="${3:-30}"
   echo "    Waiting for ${label}..."
   for i in $(seq 1 "$max_wait"); do
-    if curl -s -o /dev/null -w "%{http_code}" "$url" 2>/dev/null | grep -q 200; then
+    if curl -s -o /dev/null -w "%{http_code}" "$url" 2>/dev/null | grep -qE "200|301|302"; then
       echo "    ${label} is ready!"
       return 0
     fi
@@ -117,69 +117,31 @@ echo "============================================"
 echo ""
 
 # ================================================================
-# PHASE 1: LOCAL TEST (optional)
-# ================================================================
-if [ "$SKIP_LOCAL" = false ] && [ "$TEST_ONLY" = false ] && [ "$DEPLOY_ONLY" = false ]; then
-  echo "━━━ PHASE 1: LOCAL TEST ━━━"
-  echo ""
-
-  # Start Redis
-  echo "==> Starting local Redis..."
-  docker run -d --name "$REDIS_CONTAINER" -p 6379:6379 redis:7-alpine 2>/dev/null \
-    || docker start "$REDIS_CONTAINER" 2>/dev/null || true
-  for i in $(seq 1 10); do
-    if docker exec "$REDIS_CONTAINER" redis-cli ping 2>/dev/null | grep -q PONG; then break; fi
-    sleep 1
-  done
-
-  # Seed local DB
-  echo "==> Seeding local database..."
-  activate_venv
-  python "$PROJECT_DIR/scripts/create-test-data.py"
-
-  # Start local app
-  echo "==> Starting local FastAPI app..."
-  activate_venv
-  python run.py &
-  LOCAL_APP_PID=$!
-  wait_for_url "http://localhost:${LOCAL_PORT}/login-page" "Local app"
-
-  # Run local tests
-  echo ""
-  echo "==> Running E2E tests against local app..."
-  APP_URL="http://localhost:${LOCAL_PORT}" pytest tests/test_e2e.py -v || {
-    echo "    LOCAL TESTS FAILED!"
-    exit 1
-  }
-
-  # Stop local app
-  kill $LOCAL_APP_PID 2>/dev/null || true
-  docker stop "$REDIS_CONTAINER" 2>/dev/null || true
-  docker rm "$REDIS_CONTAINER" 2>/dev/null || true
-
-  echo ""
-  echo "==> Local tests passed!"
-  echo ""
-fi
-
-# ================================================================
-# PHASE 2: BUILD + DEPLOY
+# PHASE 1: BUILD + DEPLOY
 # ================================================================
 if [ "$TEST_ONLY" = false ]; then
-  echo "━━━ PHASE 2: BUILD & DEPLOY ━━━"
+  echo "━━━ PHASE 1: BUILD & DEPLOY ━━━"
   echo ""
 
-  # Build Docker image
-  echo "==> Building Docker image..."
-  mkdir -p "$PROJECT_DIR/fastapi-app/certs"
-  cp "$PROJECT_DIR/certs/ca.crt" "$PROJECT_DIR/fastapi-app/certs/ca.crt"
-  docker build -t "$IMAGE_NAME" "$PROJECT_DIR/fastapi-app"
-  rm -rf "$PROJECT_DIR/fastapi-app/certs"
+  # Build backend Docker image
+  echo "==> Building backend Docker image..."
+  mkdir -p "$PROJECT_DIR/backend/certs"
+  cp "$PROJECT_DIR/certs/ca.crt" "$PROJECT_DIR/backend/certs/ca.crt"
+  docker build -t "$BACKEND_IMAGE" "$PROJECT_DIR/backend"
+  rm -rf "$PROJECT_DIR/backend/certs"
+
+  # Build frontend Docker image
+  echo ""
+  echo "==> Building frontend Docker image..."
+  cd "$PROJECT_DIR/frontend"
+  npm ci --silent
+  docker build -t "$FRONTEND_IMAGE" "$PROJECT_DIR/frontend"
 
   # Load to Kind
   echo ""
-  echo "==> Loading image to Kind cluster..."
-  kind load docker-image "$IMAGE_NAME" --name "$CLUSTER_NAME"
+  echo "==> Loading images to Kind cluster..."
+  kind load docker-image "$BACKEND_IMAGE" --name "$CLUSTER_NAME"
+  kind load docker-image "$FRONTEND_IMAGE" --name "$CLUSTER_NAME"
 
   # Ensure TLS secret has ca.crt
   echo ""
@@ -208,9 +170,9 @@ if [ "$TEST_ONLY" = false ]; then
   wait_for_pods "app=redis" 120
   wait_for_pods "app=app-postgresql" 120
 
-  # Deploy FastAPI (substitute node IP)
+  # Deploy FastAPI backend (substitute node IP)
   echo ""
-  echo "==> Deploying FastAPI app (3 replicas)..."
+  echo "==> Deploying FastAPI backend (3 replicas)..."
   NODE_IP=$(kubectl get nodes -o jsonpath='{.items[0].status.addresses[?(@.type=="InternalIP")].address}')
   echo "    Node IP: ${NODE_IP}"
 
@@ -221,6 +183,15 @@ if [ "$TEST_ONLY" = false ]; then
 
   echo "==> Waiting for FastAPI pods..."
   wait_for_pods "app=fastapi-app" 180
+
+  # Deploy frontend
+  echo ""
+  echo "==> Deploying frontend (3 replicas)..."
+  kubectl apply -f "$PROJECT_DIR/keycloak/frontend/frontend-deployment.yaml"
+  kubectl apply -f "$PROJECT_DIR/keycloak/frontend/frontend-service.yaml"
+
+  echo "==> Waiting for frontend pods..."
+  wait_for_pods "app=frontend-app" 120
 
   # Update Keycloak client redirect URIs
   echo ""
@@ -235,11 +206,11 @@ if [ "$TEST_ONLY" = false ]; then
     -H "Content-Type: application/json" \
     -d "{
       \"clientId\": \"${CLIENT_ID}\",
-      \"redirectUris\": [\"http://localhost:${LOCAL_PORT}/callback\", \"http://localhost:${DEPLOYED_PORT}/callback\"],
+      \"redirectUris\": [\"http://localhost:${LOCAL_PORT}/api/auth/callback\", \"http://localhost:${DEPLOYED_PORT}/api/auth/callback\"],
       \"webOrigins\": [\"http://localhost:${LOCAL_PORT}\", \"http://localhost:${DEPLOYED_PORT}\"],
       \"attributes\": {
         \"pkce.code.challenge.method\": \"S256\",
-        \"post.logout.redirect.uris\": \"http://localhost:${LOCAL_PORT}/login-page##http://localhost:${DEPLOYED_PORT}/login-page\"
+        \"post.logout.redirect.uris\": \"http://localhost:${DEPLOYED_PORT}/login##http://localhost:${LOCAL_PORT}/login\"
       }
     }" -o /dev/null -w "%{http_code}")
   echo "    Keycloak client updated (HTTP ${HTTP_CODE})"
@@ -300,27 +271,23 @@ if [ "$DEPLOY_ONLY" = true ]; then
 fi
 
 # ================================================================
-# PHASE 3: TEST DEPLOYED APP
+# PHASE 2: TEST DEPLOYED APP
 # ================================================================
-echo "━━━ PHASE 3: TEST DEPLOYED APP ━━━"
+echo "━━━ PHASE 2: TEST DEPLOYED APP ━━━"
 echo ""
 
-# Start port-forward
-pkill -f "port-forward.*fastapi-app.*${DEPLOYED_PORT}" 2>/dev/null || true
-kubectl port-forward -n keycloak svc/fastapi-app ${DEPLOYED_PORT}:8000 &
-PF_PID=$!
-sleep 3
-
-wait_for_url "http://localhost:${DEPLOYED_PORT}/login-page" "Deployed app" || {
-  kill $PF_PID 2>/dev/null || true
-  exit 1
+wait_for_url "http://localhost:${DEPLOYED_PORT}/" "Frontend" 30 || {
+  echo "    Frontend not reachable, trying port-forward..."
+  kubectl port-forward -n keycloak svc/frontend-app ${DEPLOYED_PORT}:80 &
+  PF_PID=$!
+  sleep 3
 }
 
 echo ""
-echo "==> Running E2E tests against deployed app (http://localhost:${DEPLOYED_PORT})..."
-activate_venv
-
-APP_URL="http://localhost:${DEPLOYED_PORT}" pytest tests/test_e2e.py -v
+echo "==> Running Playwright E2E tests against deployed app (http://localhost:${DEPLOYED_PORT})..."
+cd "$PROJECT_DIR/frontend"
+npm ci --silent 2>/dev/null || true
+APP_URL="http://localhost:${DEPLOYED_PORT}" npx playwright test --reporter=html
 TEST_EXIT=$?
 
 kill $PF_PID 2>/dev/null || true
@@ -328,6 +295,7 @@ kill $PF_PID 2>/dev/null || true
 if [ $TEST_EXIT -ne 0 ]; then
   echo ""
   echo "    DEPLOYED TESTS FAILED!"
+  echo "    HTML report: $PROJECT_DIR/frontend/playwright-report/index.html"
   echo ""
   kubectl get pods -n keycloak
   exit 1
@@ -348,9 +316,8 @@ echo "  Services:"
 kubectl get svc -n keycloak
 echo ""
 echo "  URLs:"
-echo "    Local:    http://localhost:${LOCAL_PORT}"
-echo "    Deployed: http://localhost:${DEPLOYED_PORT} (kubectl port-forward)"
+echo "    Frontend: http://localhost:${DEPLOYED_PORT}"
 echo "    Keycloak: ${KEYCLOAK_URL}"
 echo ""
-echo "  To access deployed app:"
-echo "    kubectl port-forward -n keycloak svc/fastapi-app ${DEPLOYED_PORT}:8000"
+echo "  Test report: $PROJECT_DIR/frontend/playwright-report/index.html"
+echo ""
