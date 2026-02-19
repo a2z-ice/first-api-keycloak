@@ -24,3 +24,7 @@ patches:
     target:
       kind: Ingress
       name: frontend-ingress
+  - path: patches/secret-patch.yaml
+    target:
+      kind: Secret
+      name: fastapi-app-secret
