@@ -68,6 +68,7 @@ This document catalogs all technologies, tools, patterns, and skills used in the
 
 **Pipeline test script**: `scripts/cicd-pipeline-test.sh` — fully automated end-to-end test of all three pipeline phases. Verified working: 45/45 E2E tests pass in dev, PR preview, and prod. Key patterns inside:
 - GITHUB_TOKEN retrieved from k8s secret (`argocd/github-token`) if not in environment
+- ArgoCD login via `setup_argocd_login()` — connects directly to NodePort `localhost:30080`, no port-forward; prints Docker proxy commands if port is unreachable
 - ArgoCD app detection via `kubectl get application` (not `argocd app list`, which is unreliable in non-TTY)
 - Seed script restores mutated student names before each E2E run
 - No sudo calls — `/etc/hosts` management is printed as instructions for the user
@@ -126,6 +127,20 @@ Per-overlay patches applied via JSON Patch (RFC 6902):
 - `config-patch.yaml` — APP_URL, FRONTEND_URL, KEYCLOAK_CLIENT_ID
 - `ingress-patch.yaml` — Ingress hostname
 - `secret-patch.yaml` — KEYCLOAK_CLIENT_SECRET (per-env client secret)
+
+### ArgoCD NodePort Access (No Port-Forward)
+
+`cluster/kind-config.yaml` maps `containerPort 30080 → hostPort 30080` and `30081 → 30081` so ArgoCD's NodePorts are reachable directly from the host. For clusters created **before this mapping was added**, a lightweight `alpine/socat` Docker proxy bridges the gap without cluster recreation:
+
+```bash
+NODE_IP=$(kubectl get nodes -o jsonpath='{.items[0].status.addresses[?(@.type=="InternalIP")].address}')
+docker run -d --name argocd-http-proxy --network kind --restart unless-stopped \
+  -p 30080:30080 alpine/socat TCP-LISTEN:30080,fork,reuseaddr TCP:${NODE_IP}:30080
+docker run -d --name argocd-https-proxy --network kind --restart unless-stopped \
+  -p 30081:30081 alpine/socat TCP-LISTEN:30081,fork,reuseaddr TCP:${NODE_IP}:30081
+```
+
+The proxy containers use `--restart unless-stopped` so they survive Docker Desktop restarts. Verify with `docker ps --filter name=argocd`.
 
 ### Registry Mirror (Post-Creation)
 
@@ -248,6 +263,8 @@ Custom `RedisSessionMiddleware`:
 |---------|------|------|
 | Frontend (Nginx) | NodePort | 30000 |
 | Keycloak | NodePort | 31111 |
+| ArgoCD (HTTP) | NodePort | 30080 → redirects to HTTPS |
+| ArgoCD (HTTPS) | NodePort | 30081 |
 | FastAPI | ClusterIP | 8000 |
 | Redis | ClusterIP | 6379 |
 | PostgreSQL (app) | ClusterIP | 5432 |
