@@ -1,7 +1,7 @@
 # CI/CD Pipeline Test Instructions
 
 Complete end-to-end guide for testing the ArgoCD GitOps multi-environment pipeline:
-**PR Preview → Dev → Prod promotion**.
+**PR Preview → Dev → Prod promotion** — both via the automated script **and** via Jenkins pipelines.
 
 ---
 
@@ -16,6 +16,13 @@ Complete end-to-end guide for testing the ArgoCD GitOps multi-environment pipeli
   - [Step 5: /etc/hosts entries](#step-5-etchosts-entries)
   - [Step 6: GitHub Token for PR Generator](#step-6-github-token-for-pr-generator)
   - [Step 7: Create and push gitops branches](#step-7-create-and-push-gitops-branches)
+  - [Step 8: Setup Jenkins](#step-8-setup-jenkins)
+- [ArgoCD Credentials Reference](#argocd-credentials-reference)
+- [Jenkins Credentials Reference](#jenkins-credentials-reference)
+- [Jenkins Job Setup](#jenkins-job-setup)
+  - [Dev Pipeline Job](#dev-pipeline-job)
+  - [PR Preview Pipeline Job (Multibranch)](#pr-preview-pipeline-job-multibranch)
+  - [Prod Pipeline Job](#prod-pipeline-job)
 - [Phase 1: Dev Environment Pipeline](#phase-1-dev-environment-pipeline)
   - [1.1 Build and push dev images](#11-build-and-push-dev-images)
   - [1.2 Update dev overlay and push to git](#12-update-dev-overlay-and-push-to-git)
@@ -36,9 +43,11 @@ Complete end-to-end guide for testing the ArgoCD GitOps multi-environment pipeli
   - [3.3 Wait for prod sync](#33-wait-for-argocd-to-sync-prod)
   - [3.4 Setup prod environment](#34-setup-prod-environment)
   - [3.5 Run E2E tests against prod](#35-run-e2e-tests-against-prod)
+- [Automated Script](#automated-script)
 - [Verification Checks](#verification-checks)
 - [Troubleshooting](#troubleshooting)
 - [Resuming from a Previous Session](#resuming-from-a-previous-session)
+- [Service URLs](#service-urls)
 
 ---
 
@@ -171,14 +180,244 @@ The ArgoCD List Generator watches the `dev` branch for dev and `main` branch for
 ```bash
 # Create dev branch from cicd (which has all gitops files)
 git checkout cicd
-git checkout -b dev
-git push origin dev
+git push origin cicd:dev --force
 
 # Merge cicd into main for prod support
 git checkout main
 git merge cicd --no-edit
 git push origin main
+
+# Return to cicd
+git checkout cicd
 ```
+
+### Step 8: Setup Jenkins
+
+Jenkins runs as a Docker container with full access to Docker, kubectl, ArgoCD CLI, and the `gh` CLI. The custom image (`jenkins/Dockerfile`) pre-installs all required tools and plugins.
+
+#### 8.1 Start Jenkins
+
+```bash
+bash scripts/setup-jenkins.sh
+```
+
+This script:
+1. Generates `jenkins/kind-jenkins.config` — a kubeconfig using the Kind node's real internal IP (not `127.0.0.1`) so the Jenkins container can reach the Kubernetes API.
+2. Starts Jenkins via `docker compose up -d` in the `jenkins/` directory.
+
+Verify Jenkins is running:
+```bash
+docker ps | grep jenkins
+# Expected: jenkins container, port 8090→8080
+```
+
+#### 8.2 Get initial admin password and unlock Jenkins
+
+```bash
+docker exec jenkins cat /var/jenkins_home/secrets/initialAdminPassword
+```
+
+Open **http://localhost:8090**, paste the password, then choose **Install suggested plugins**.
+
+#### 8.3 Verify pre-installed tools in the Jenkins container
+
+The `jenkins/Dockerfile` pre-installs all required tools. Confirm they are available:
+
+```bash
+docker exec jenkins bash -c "
+  echo '--- Docker CLI ---' && docker version --format '{{.Client.Version}}'
+  echo '--- kubectl ---' && kubectl version --client --short 2>/dev/null
+  echo '--- argocd ---' && argocd version --client 2>/dev/null | head -1
+  echo '--- node ---' && node --version
+  echo '--- gh ---' && gh --version | head -1
+"
+```
+
+Pre-installed Jenkins plugins (baked into the image):
+- `git`, `github` — SCM integration
+- `workflow-aggregator` — Pipeline DSL
+- `credentials-binding` — `withCredentials` block support
+- `blueocean` — modern pipeline UI
+- `docker-workflow` — Docker build steps
+- `kubernetes-cli` — kubectl in pipelines
+- `ansicolor` — colored console output
+- `pipeline-multibranch-defaults` — Multibranch Pipeline support
+
+---
+
+## ArgoCD Credentials Reference
+
+| Credential | Value | How to retrieve |
+|---|---|---|
+| ArgoCD UI URL | http://localhost:30080 | NodePort — accessible from host |
+| ArgoCD username | `admin` | Fixed |
+| ArgoCD password | (auto-generated on install) | `kubectl -n argocd get secret argocd-initial-admin-secret -o jsonpath='{.data.password}' \| base64 -d` |
+
+Save the password — you will need it for the Jenkins `ARGOCD_PASSWORD` credential:
+```bash
+ARGOCD_PASSWORD=$(kubectl -n argocd get secret argocd-initial-admin-secret \
+  -o jsonpath='{.data.password}' | base64 -d)
+echo "ArgoCD password: $ARGOCD_PASSWORD"
+```
+
+Login via CLI:
+```bash
+argocd login localhost:30080 --insecure --username admin --password "$ARGOCD_PASSWORD"
+```
+
+> **Note:** The ArgoCD password changes every time the cluster is recreated. After a cluster reset, update the `ARGOCD_PASSWORD` credential in Jenkins.
+
+---
+
+## Jenkins Credentials Reference
+
+Jenkins pipelines require two credentials configured in **Manage Jenkins → Credentials → System → Global credentials (unrestricted)**.
+
+| Credential ID | Kind | Value | Used by |
+|---|---|---|---|
+| `GITHUB_TOKEN` | Secret text | GitHub PAT (`repo` + `workflow` scopes) | All three Jenkinsfiles — git push via HTTPS and `gh` CLI for PR create/merge/labels |
+| `ARGOCD_PASSWORD` | Secret text | ArgoCD admin password (from above) | All three Jenkinsfiles — `argocd login` before `argocd app wait` |
+
+> The pipelines push to git using HTTPS with token authentication:
+> `git remote set-url origin https://x-access-token:${GITHUB_TOKEN}@github.com/a2z-ice/first-api-keycloak.git`
+> No SSH key is needed.
+
+### Adding credentials in Jenkins UI
+
+1. Go to **http://localhost:8090** → **Manage Jenkins** → **Credentials**
+2. Click **System** → **Global credentials (unrestricted)** → **+ Add Credentials**
+3. Add `GITHUB_TOKEN`:
+   - Kind: **Secret text**
+   - Secret: paste your GitHub PAT
+   - ID: `GITHUB_TOKEN`
+   - Description: `GitHub Personal Access Token`
+   - Click **Create**
+4. Add `ARGOCD_PASSWORD`:
+   - Kind: **Secret text**
+   - Secret: paste the ArgoCD password (from `ARGOCD_PASSWORD` command above)
+   - ID: `ARGOCD_PASSWORD`
+   - Description: `ArgoCD Admin Password`
+   - Click **Create**
+
+### Adding credentials via REST API (alternative)
+
+```bash
+JENKINS_URL="http://localhost:8090"
+JENKINS_PASS=$(docker exec jenkins cat /var/jenkins_home/secrets/initialAdminPassword)
+ARGOCD_PASS=$(kubectl -n argocd get secret argocd-initial-admin-secret \
+  -o jsonpath='{.data.password}' | base64 -d)
+
+# Get CSRF crumb
+CRUMB=$(curl -s -u "admin:${JENKINS_PASS}" \
+  "${JENKINS_URL}/crumbIssuer/api/xml?xpath=concat(//crumbRequestField,%22:%22,//crumb)")
+
+# Add GITHUB_TOKEN
+curl -s -u "admin:${JENKINS_PASS}" -H "$CRUMB" \
+  -X POST "${JENKINS_URL}/credentials/store/system/domain/_/createCredentials" \
+  --data-urlencode 'json={
+    "": "0",
+    "credentials": {
+      "scope": "GLOBAL",
+      "id": "GITHUB_TOKEN",
+      "description": "GitHub Personal Access Token",
+      "secret": "'"${GITHUB_TOKEN}"'",
+      "$class": "org.jenkinsci.plugins.plaincredentials.impl.StringCredentialsImpl"
+    }
+  }'
+
+# Add ARGOCD_PASSWORD
+curl -s -u "admin:${JENKINS_PASS}" -H "$CRUMB" \
+  -X POST "${JENKINS_URL}/credentials/store/system/domain/_/createCredentials" \
+  --data-urlencode 'json={
+    "": "0",
+    "credentials": {
+      "scope": "GLOBAL",
+      "id": "ARGOCD_PASSWORD",
+      "description": "ArgoCD Admin Password",
+      "secret": "'"${ARGOCD_PASS}"'",
+      "$class": "org.jenkinsci.plugins.plaincredentials.impl.StringCredentialsImpl"
+    }
+  }'
+```
+
+---
+
+## Jenkins Job Setup
+
+Three pipeline jobs correspond to the three deployment phases. Each reads its `Jenkinsfile` from `jenkins/pipelines/`.
+
+### Dev Pipeline Job
+
+**Purpose:** Triggered by pushes to the `dev` branch. Builds images → pushes to registry → updates dev overlay → waits for ArgoCD sync → runs E2E tests → opens a promotion PR to `main`.
+
+**Jenkinsfile:** `jenkins/pipelines/Jenkinsfile.dev`
+
+**Create in Jenkins UI:**
+1. **New Item** → name: `student-app-dev-pipeline` → type: **Pipeline** → OK
+2. **General** → check **Do not allow concurrent builds**
+3. Under **Pipeline**:
+   - Definition: **Pipeline script from SCM**
+   - SCM: **Git**
+   - Repository URL: `https://github.com/a2z-ice/first-api-keycloak.git`
+   - Branch Specifier: `*/dev`
+   - Script Path: `jenkins/pipelines/Jenkinsfile.dev`
+4. **Build Triggers**: check **GitHub hook trigger for GITScm polling** (or **Poll SCM**: `H/5 * * * *`)
+5. **Save**
+
+**Credentials used:** `GITHUB_TOKEN`, `ARGOCD_PASSWORD`
+
+**What it does on success:** Creates a promotion PR from `dev` → `main` via `gh pr create`. Merging that PR triggers the prod pipeline.
+
+---
+
+### PR Preview Pipeline Job (Multibranch)
+
+**Purpose:** Automatically triggered for every PR opened against `dev`. Builds PR images tagged `pr-{N}-{8-char-sha}` → adds `preview` label to the PR (triggers ArgoCD PullRequest Generator) → copies TLS secret → waits for ArgoCD to create and sync the preview Application → registers Keycloak client → seeds database → runs E2E tests → merges the PR on success.
+
+**Jenkinsfile:** `jenkins/pipelines/Jenkinsfile.pr-preview`
+
+**Create in Jenkins UI:**
+1. **New Item** → name: `student-app-pr-preview` → type: **Multibranch Pipeline** → OK
+2. **Branch Sources** → **Add source** → **GitHub**
+   - Credentials: add a GitHub credential (HTTPS with your PAT, or SSH key)
+   - Repository: `a2z-ice/first-api-keycloak`
+   - Behaviours: add **Filter by name (with wildcards)** if you only want PRs — leave default to scan all branches and PRs
+3. **Build Configuration**:
+   - Mode: **by Jenkinsfile**
+   - Script Path: `jenkins/pipelines/Jenkinsfile.pr-preview`
+4. **Scan Multibranch Pipeline Triggers**: check **Periodically if not otherwise run** (interval: 1 minute) or configure a GitHub webhook pointing to `http://localhost:8090/github-webhook/`
+5. **Save**, then click **Scan Multibranch Pipeline Now**
+
+**Credentials used:** `GITHUB_TOKEN`, `ARGOCD_PASSWORD`
+
+**Key env vars injected automatically by GitHub Branch Source plugin:**
+- `CHANGE_ID` — PR number (e.g., `5`)
+- `GIT_COMMIT` — full SHA of the PR HEAD commit
+- The pipeline derives `HEAD_SHORT_SHA = GIT_COMMIT.take(8)` — matches ArgoCD's `{{head_short_sha}}`
+
+**Note:** The pipeline will error immediately if `CHANGE_ID` is not set (i.e., if triggered on a non-PR branch). This is by design.
+
+---
+
+### Prod Pipeline Job
+
+**Purpose:** Triggered by pushes to `main`. Reads the validated dev image tag from the dev overlay → updates prod overlay → pushes to main → waits for ArgoCD sync → runs E2E tests against prod. No image rebuild — the same image validated in dev is reused.
+
+**Jenkinsfile:** `jenkins/pipelines/Jenkinsfile.prod`
+
+**Create in Jenkins UI:**
+1. **New Item** → name: `student-app-prod-pipeline` → type: **Pipeline** → OK
+2. **General** → check **Do not allow concurrent builds**
+3. Under **Pipeline**:
+   - Definition: **Pipeline script from SCM**
+   - SCM: **Git**
+   - Repository URL: `https://github.com/a2z-ice/first-api-keycloak.git`
+   - Branch Specifier: `*/main`
+   - Script Path: `jenkins/pipelines/Jenkinsfile.prod`
+4. **Build Triggers**: check **GitHub hook trigger for GITScm polling**
+5. **Save**
+
+**Credentials used:** `GITHUB_TOKEN`, `ARGOCD_PASSWORD`
 
 ---
 
@@ -237,6 +476,9 @@ ArgoCD polls GitHub every 3 minutes (or use webhook). It will detect the commit 
 # Port-forward if needed
 kubectl port-forward svc/argocd-server -n argocd 30080:80 &>/dev/null &
 sleep 2
+
+# Trigger immediate hard refresh (skip the 3-minute poll delay)
+argocd app get student-app-dev --hard-refresh
 
 argocd app wait student-app-dev --health --sync --timeout 300
 ```
@@ -582,6 +824,9 @@ git push origin main
 ### 3.3 Wait for ArgoCD to sync prod
 
 ```bash
+# Trigger immediate refresh
+argocd app get student-app-prod --hard-refresh
+sleep 5
 argocd app wait student-app-prod --health --sync --timeout 300
 kubectl get pods -n student-app-prod
 ```
@@ -653,6 +898,31 @@ Expected: **45 passed**
 
 ---
 
+## Automated Script
+
+All three phases can be run automatically with the pipeline test script:
+
+```bash
+# Retrieve GITHUB_TOKEN from the k8s secret (if already stored there)
+GITHUB_TOKEN=$(kubectl get secret github-token -n argocd -o jsonpath='{.data.token}' | base64 -d)
+
+# Run all phases (infra already up — most common usage)
+GITHUB_TOKEN=$GITHUB_TOKEN ./scripts/cicd-pipeline-test.sh --skip-setup
+
+# Skip individual phases as needed
+./scripts/cicd-pipeline-test.sh --skip-setup --skip-phase1          # Only PR Preview + Prod
+./scripts/cicd-pipeline-test.sh --skip-setup --pr-number 5          # Reuse existing PR #5
+./scripts/cicd-pipeline-test.sh --skip-setup --skip-phase2          # Only Dev + Prod
+```
+
+The script mirrors every manual step above, with added resilience:
+- ArgoCD hard-refresh to skip the 3-minute poll delay
+- Poll loops before `kubectl wait` to avoid "no matching resources" errors
+- Restores `Student User` name if an edit test renamed it (idempotent seeding)
+- No `sudo` usage — `/etc/hosts` entries are printed for manual addition
+
+---
+
 ## Verification Checks
 
 After completing all phases, run these to confirm everything is healthy:
@@ -687,7 +957,7 @@ kubectl get ns | grep "student-app-pr" || echo "Clean: no preview namespaces"
 
 The `dev` or `main` branch doesn't have the gitops overlay files.
 ```bash
-git checkout cicd && git push origin cicd:dev && git push origin cicd:main
+git checkout cicd && git push origin cicd:dev --force && git push origin cicd:main
 ```
 
 ### Pods stuck in ImagePullBackOff
@@ -751,6 +1021,59 @@ argocd app delete student-app-pr-1 --cascade
 
 Do NOT add `containerdConfigPatches` to `cluster/kind-config.yaml`. The registry mirror is configured post-creation by `setup-registry.sh` via `docker exec` writing to `/etc/containerd/certs.d/localhost:5001/hosts.toml` inside the Kind node.
 
+### FastAPI pods get `httpx.ConnectError: All connection attempts failed` on `/api/auth/login`
+
+This means the pods cannot reach Keycloak at `idp.keycloak.com:31111`. The CoreDNS hosts entry has a stale node IP (the IP changes when the cluster is recreated).
+
+```bash
+# Check current node IP
+kubectl get nodes -o jsonpath='{.items[0].status.addresses[?(@.type=="InternalIP")].address}'
+
+# Check what IP CoreDNS has
+kubectl get configmap coredns -n kube-system -o jsonpath='{.data.Corefile}' | grep idp
+
+# Fix: patch CoreDNS with the correct node IP
+NODE_IP=$(kubectl get nodes -o jsonpath='{.items[0].status.addresses[?(@.type=="InternalIP")].address}')
+CURRENT=$(kubectl get configmap coredns -n kube-system -o jsonpath='{.data.Corefile}')
+NEW=$(echo "$CURRENT" | sed "s|[0-9.]\{7,15\} idp.keycloak.com|${NODE_IP} idp.keycloak.com|g")
+kubectl patch configmap coredns -n kube-system --type=merge \
+  -p "{\"data\":{\"Corefile\":$(echo "$NEW" | python3 -c "import sys,json; print(json.dumps(sys.stdin.read()))")}}"
+
+# Restart CoreDNS and the FastAPI pods to flush DNS cache
+kubectl rollout restart deployment coredns -n kube-system
+kubectl rollout status deployment coredns -n kube-system --timeout=60s
+kubectl rollout restart deployment fastapi-app -n student-app-dev
+kubectl rollout restart deployment fastapi-app -n student-app-prod
+```
+
+> **Prevention:** If you recreate the cluster, always re-run `bash scripts/setup-argocd.sh` rather than using `--skip-setup`.
+
+### Jenkins cannot reach the Kubernetes API
+
+The Jenkins container uses `jenkins/kind-jenkins.config`, which references the Kind node's real internal IP. If the cluster is recreated, regenerate the kubeconfig:
+```bash
+bash scripts/setup-jenkins.sh
+```
+
+### Jenkins ARGOCD_PASSWORD credential is wrong after cluster reset
+
+The ArgoCD initial admin secret changes on every cluster creation. Update the credential:
+```bash
+NEW_PASS=$(kubectl -n argocd get secret argocd-initial-admin-secret \
+  -o jsonpath='{.data.password}' | base64 -d)
+echo "New ArgoCD password: $NEW_PASS"
+# Update in Jenkins UI: Manage Jenkins → Credentials → ARGOCD_PASSWORD → Update
+```
+
+### Jenkins `gh pr edit --add-label` silently fails
+
+`gh pr edit --add-label` requires `read:org` scope. If the PAT lacks that scope, use the GitHub REST API directly (what `cicd-pipeline-test.sh` does):
+```bash
+curl -s -X POST -H "Authorization: token $GITHUB_TOKEN" \
+  -d '{"labels":["preview"]}' \
+  "https://api.github.com/repos/a2z-ice/first-api-keycloak/issues/${PR_NUMBER}/labels"
+```
+
 ---
 
 ## Resuming from a Previous Session
@@ -779,7 +1102,10 @@ curl -s http://localhost:5001/v2/_catalog
 # 5. Verify github-token secret in argocd namespace
 kubectl get secret github-token -n argocd
 
-# 6. Continue from the phase you were on
+# 6. Verify Jenkins is running
+docker ps | grep jenkins
+
+# 7. Continue from the phase you were on
 ```
 
 **Key state to check when resuming:**
@@ -797,9 +1123,20 @@ kubectl get secret github-token -n argocd
 | Dev App | http://dev.student.local:8080 | ArgoCD syncs from `dev` branch |
 | Prod App | http://prod.student.local:8080 | ArgoCD syncs from `main` branch |
 | PR Preview | http://pr-{N}.student.local:8080 | Ephemeral; created when PR labeled `preview` |
-| ArgoCD UI | http://localhost:30080 | admin / (see initial-admin-secret) |
+| ArgoCD UI | http://localhost:30080 | admin / (see `argocd-initial-admin-secret`) |
+| Jenkins UI | http://localhost:8090 | admin / (see `initialAdminPassword`) |
 | Keycloak | https://idp.keycloak.com:31111 | admin / admin |
 | Local Registry | http://localhost:5001/v2/_catalog | registry:2 container |
+
+**Retrieve Jenkins admin password:**
+```bash
+docker exec jenkins cat /var/jenkins_home/secrets/initialAdminPassword
+```
+
+**Retrieve ArgoCD admin password:**
+```bash
+kubectl -n argocd get secret argocd-initial-admin-secret -o jsonpath='{.data.password}' | base64 -d
+```
 
 ## Test Users
 
