@@ -1,19 +1,13 @@
 kind: Cluster
 apiVersion: kind.x-k8s.io/v1alpha4
-containerdConfigPatches:
-  - |-
-    [plugins."io.containerd.grpc.v1.cri".registry]
-      [plugins."io.containerd.grpc.v1.cri".registry.mirrors]
-        [plugins."io.containerd.grpc.v1.cri".registry.mirrors."localhost:5001"]
-          endpoint = ["http://registry:5000"]
+# Note: Registry mirror (localhost:5001 → registry:5000) is configured
+# post-creation via scripts/setup-registry.sh (Docker exec into node)
+# because containerdConfigPatches causes kubelet startup failure on
+# macOS + Docker Desktop with kindest/node:v1.35.0.
 nodes:
   - role: control-plane
-    kubeadmConfigPatches:
-      - |
-        kind: InitConfiguration
-        nodeRegistration:
-          kubeletExtraArgs:
-            node-labels: "ingress-ready=true"
+    labels:
+      ingress-ready: "true"
     extraPortMappings:
       - containerPort: 31111
         hostPort: 31111
