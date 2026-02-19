@@ -53,14 +53,127 @@ This document catalogs all technologies, tools, patterns, and skills used in the
 | Redis | — | Session storage (multi-replica consistency) |
 | OpenSSL | — | Self-signed TLS certificate generation |
 
+### CI/CD & GitOps
+
+| Technology | Version | Purpose |
+|-----------|---------|---------|
+| ArgoCD | 3.0.5 | GitOps controller — syncs K8s state from git |
+| ArgoCD ApplicationSet | — | Multi-app templating (List + PullRequest generators) |
+| Kustomize | built-in | Overlay-based K8s manifest composition |
+| Nginx Ingress Controller | — | Routes `*.student.local:8080` to correct namespaces |
+| Docker Registry | registry:2 | Local image registry on port 5001 |
+| Jenkins | LTS | CI pipeline (Multibranch, declarative Jenkinsfiles) |
+| GitHub REST API | v3 | PR label management, SHA resolution |
+| gh CLI | — | PR/issue management |
+
+**Pipeline test script**: `scripts/cicd-pipeline-test.sh` — fully automated end-to-end test of all three pipeline phases. Verified working: 45/45 E2E tests pass in dev, PR preview, and prod. Key patterns inside:
+- GITHUB_TOKEN retrieved from k8s secret (`argocd/github-token`) if not in environment
+- ArgoCD app detection via `kubectl get application` (not `argocd app list`, which is unreliable in non-TTY)
+- Seed script restores mutated student names before each E2E run
+- No sudo calls — `/etc/hosts` management is printed as instructions for the user
+
 ### DevOps / Scripting
 
 | Technology | Purpose |
 |-----------|---------|
 | Bash | Automation scripts (build, deploy, test, cleanup) |
-| curl | Keycloak Admin REST API calls |
-| sed | Template substitution (`__NODE_IP__` in K8s manifests) |
+| curl | Keycloak Admin REST API + GitHub REST API calls |
+| sed | Template substitution in K8s manifests and kustomization.yaml |
 | gh (GitHub CLI) | PR/issue management |
+
+---
+
+## GitOps / CI-CD Architecture Patterns
+
+### ArgoCD ApplicationSet — List Generator (Dev + Prod)
+
+Manages two permanent environments from a single resource. Watches different git branches:
+
+```yaml
+generators:
+  - list:
+      elements:
+        - env: dev    # watches: dev branch → student-app-dev namespace
+        - env: prod   # watches: main branch → student-app-prod namespace
+```
+
+Trigger: Jenkins (or manual) commits updated image tag to overlay `kustomization.yaml` and pushes to the watched branch. ArgoCD polls every 3 minutes and auto-syncs.
+
+### ArgoCD ApplicationSet — PullRequest Generator (PR Previews)
+
+Watches GitHub for open PRs with a specific label (`preview`). For each matching PR, creates one ephemeral `Application`. When the PR is closed, the Application and its namespace are automatically deleted (cascade prune).
+
+Key variables available in PR Generator templates:
+- `{{number}}` — PR number
+- `{{head_sha}}` — full commit SHA
+- `{{head_short_sha}}` — **8-char** short SHA (not 7 — important for image tagging!)
+- `{{branch}}` — source branch name
+
+**Inline kustomize overrides** — PR-specific values (image tag, APP_URL, client ID, Ingress host, client secret) are injected directly in the ApplicationSet `source.kustomize` block. No per-PR git files are committed.
+
+### Kustomize Base/Overlay Pattern
+
+```
+gitops/environments/
+├── base/           # Generic manifests (no namespace, placeholder config values)
+└── overlays/
+    ├── dev/        # JSON patches for dev-specific values; image tags updated by CI
+    ├── prod/       # JSON patches for prod; always uses same tag validated in dev
+    └── preview/    # Minimal overlay; all PR-specific values injected by ApplicationSet
+```
+
+Per-overlay patches applied via JSON Patch (RFC 6902):
+- `config-patch.yaml` — APP_URL, FRONTEND_URL, KEYCLOAK_CLIENT_ID
+- `ingress-patch.yaml` — Ingress hostname
+- `secret-patch.yaml` — KEYCLOAK_CLIENT_SECRET (per-env client secret)
+
+### Registry Mirror (Post-Creation)
+
+`containerdConfigPatches` in `kind-config.yaml` crashes the kubelet on macOS + Docker Desktop + kindest/node:v1.35. Registry mirror is configured post-cluster-creation by writing into the Kind node:
+
+```bash
+docker exec kind-node bash -c "
+  mkdir -p /etc/containerd/certs.d/localhost:5001
+  cat > /etc/containerd/certs.d/localhost:5001/hosts.toml << TOML
+server = \"http://registry:5000\"
+[host.\"http://registry:5000\"]
+  capabilities = [\"pull\", \"resolve\", \"push\"]
+  skip_verify = true
+TOML
+"
+```
+
+### CoreDNS Override (Replaces hostAliases)
+
+All pods in all namespaces resolve `idp.keycloak.com` via a CoreDNS `hosts` block pointing to the Kind node IP. Eliminates the need for `hostAliases` in every deployment manifest:
+
+```
+hosts {
+  172.19.0.3 idp.keycloak.com
+  fallthrough
+}
+```
+
+### Three-Tier Deployment Flow
+
+```
+PR opened  → Jenkins builds pr-{N}-{8-char-sha} images
+           → Labels PR 'preview'
+           → ArgoCD creates student-app-pr-{N} (ephemeral)
+           → E2E tests pass
+           → PR merged → namespace auto-deleted
+
+dev branch → Jenkins builds dev-{sha} images
+           → Updates dev overlay kustomization.yaml
+           → ArgoCD syncs student-app-dev
+           → E2E tests pass
+           → Jenkins opens dev→prod PR
+
+main branch → Jenkins reads dev image tag (no rebuild)
+            → Updates prod overlay kustomization.yaml
+            → ArgoCD syncs student-app-prod
+            → E2E tests pass
+```
 
 ---
 

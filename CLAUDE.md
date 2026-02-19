@@ -60,7 +60,7 @@ cd frontend && npx playwright test --reporter=html
 
 # Setup individual components
 ./scripts/setup-registry.sh          # Start local Docker registry on localhost:5001
-./scripts/setup-argocd.sh            # Install ArgoCD v3.0.x + Nginx Ingress + CoreDNS patch
+./scripts/setup-argocd.sh            # Install ArgoCD v3.0.5 + Nginx Ingress + CoreDNS patch
 ./scripts/setup-jenkins.sh           # Generate kubeconfig + start Jenkins via docker compose
 ./scripts/setup-keycloak-envs.sh     # Create dev + prod Keycloak clients
 
@@ -68,6 +68,28 @@ cd frontend && npx playwright test --reporter=html
 curl http://localhost:5001/v2/_catalog    # Registry: {"repositories":[...]}
 argocd app list                          # Shows student-app-dev and student-app-prod
 kubectl get ns | grep student-app        # List environment namespaces
+
+# Full automated pipeline test (all three phases: dev → PR preview → prod)
+GITHUB_TOKEN=<pat> ./scripts/cicd-pipeline-test.sh --skip-setup
+
+# Retrieve GITHUB_TOKEN from the k8s secret if not in environment
+GITHUB_TOKEN=$(kubectl get secret github-token -n argocd -o jsonpath='{.data.token}' | base64 -d)
+
+# Pipeline test flags
+./scripts/cicd-pipeline-test.sh --skip-setup              # Skip Phase 0 (infra already running)
+./scripts/cicd-pipeline-test.sh --skip-setup --skip-phase1  # Only run Phase 2 + 3
+./scripts/cicd-pipeline-test.sh --skip-setup --pr-number 5  # Reuse existing PR #5
+```
+
+**`/etc/hosts` for GitOps environments** — entries must be added manually (the script does not use sudo):
+```bash
+# One-time: dev + prod
+echo '127.0.0.1 dev.student.local prod.student.local' | sudo tee -a /etc/hosts
+
+# Per PR preview run (script warns what to add; add before running):
+echo '127.0.0.1 pr-5.student.local' | sudo tee -a /etc/hosts
+# After PR is closed and cleaned up:
+sudo sed -i '' '/pr-5.student.local/d' /etc/hosts
 ```
 
 ## Architecture
@@ -238,3 +260,20 @@ Test users: `admin-user`/`admin123` (admin), `student-user`/`student123` (studen
 - `GITHUB_TOKEN` — GitHub PAT for `gh pr merge`, `gh pr create`, label management
 - `ARGOCD_PASSWORD` — ArgoCD admin password for `argocd` CLI commands
 - Git SSH key or HTTPS token — for pushing overlay commits to GitHub
+
+### Critical Gotchas (ArgoCD CI/CD)
+
+- **`containerdConfigPatches` crashes kubelet** on macOS + Docker Desktop + kindest/node:v1.35. Registry mirror must be configured post-creation via `setup-registry.sh` (writes `/etc/containerd/certs.d/localhost:5001/hosts.toml` into node).
+- **PR image SHA is 8 chars**: ArgoCD `{{head_short_sha}}` = 8 chars. Always use `git rev-parse HEAD | cut -c1-8` or GitHub API `sha[:8]` when tagging PR images. 7-char tags will cause `ImagePullBackOff`.
+- **`keycloak-tls` secret must be copied** to each env namespace (`student-app-dev`, `student-app-prod`, `student-app-pr-{N}`). `setup-argocd.sh` pre-copies for dev/prod; Jenkins Jenkinsfile handles PR preview.
+- **Per-env Keycloak client secrets**: Base secret has `KEYCLOAK_CLIENT_SECRET: student-app-secret` but each env uses a different client (e.g., `student-app-dev-secret`). Each overlay must have `patches/secret-patch.yaml` replacing this value.
+- **PR label via REST API**: `gh pr edit --add-label` may silently fail if token lacks `read:org`. Use the GitHub REST API directly: `POST /repos/{owner}/{repo}/issues/{n}/labels`.
+- **ArgoCD watches branches**: `dev` overlay is watched on `dev` branch; `prod` overlay on `main`. Both branches must have the `gitops/` directory. Create them from `cicd`: `git push origin cicd:dev && git push origin cicd:main`.
+- **DB seeding via inline Python**: The `create-test-data.py` script is not baked into the image. Use `kubectl exec` with inline Python (see `cicd-test-instruction.md` for the full seeding block).
+- **Seed must RESTORE student names**: E2E test `admin can edit a student` renames "Student User" to "Edited Student Name" permanently. The seed script in `cicd-pipeline-test.sh` checks `if su.name != 'Student User': su.name = 'Student User'` to restore it before each run.
+- **No sudo in pipeline script**: `cicd-pipeline-test.sh` never calls sudo (macOS sudo writes to `/dev/tty`, bypassing `2>/dev/null` and causing unexpected exits). The script warns what `/etc/hosts` entries to add and the user must add them manually.
+- **GITHUB_TOKEN must be set explicitly**: It is not inherited from the login session. Either `export GITHUB_TOKEN=<pat>` or retrieve from the k8s secret: `kubectl get secret github-token -n argocd -o jsonpath='{.data.token}' | base64 -d`.
+
+### Full Test Guide
+
+See `cicd-test-instruction.md` for the complete step-by-step instructions to test all three pipeline phases (dev, PR preview, prod promotion) with exact shell commands.

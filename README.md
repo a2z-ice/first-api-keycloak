@@ -14,6 +14,7 @@ OAuth2.1-secured Student Management System with **Keycloak** as the identity pro
 - [Quick Start (One Command)](#quick-start-one-command)
 - [Step-by-Step Setup](#step-by-step-setup)
 - [Running E2E Tests](#running-e2e-tests)
+- [CI/CD Pipeline (ArgoCD GitOps)](#cicd-pipeline-argocd-gitops)
 - [Local Development](#local-development)
 - [Project Structure](#project-structure)
 - [API Reference](#api-reference)
@@ -398,6 +399,107 @@ This demo is completely separate from the main 45 E2E tests:
 #### Plan Document
 
 For full implementation details, see [`plans/4-playwright-fail-screenshot-demo.md`](plans/4-playwright-fail-screenshot-demo.md).
+
+---
+
+## CI/CD Pipeline (ArgoCD GitOps)
+
+The project includes a full GitOps pipeline with three environment tiers managed by **ArgoCD**, a local Docker registry, and Jenkins CI.
+
+### Pipeline Architecture
+
+```mermaid
+flowchart TD
+    Dev["Developer\ngit push"] --> GH["GitHub\nRepo"]
+
+    GH -->|"webhook"| Jenkins["Jenkins\nlocalhost:8090"]
+
+    Jenkins -->|"docker build + push"| Reg["Local Registry\nlocalhost:5001"]
+    Jenkins -->|"update kustomization.yaml\n+ git push"| GH
+    Jenkins -->|"add 'preview' label"| GH
+
+    GH -->|"ArgoCD polls\nevery 3 min"| ArgoCD["ArgoCD\nlocalhost:30080"]
+
+    subgraph "Kind Cluster"
+        ArgoCD -->|"List Generator\ndev branch"| Dev_NS["student-app-dev\nhttp://dev.student.local:8080"]
+        ArgoCD -->|"List Generator\nmain branch"| Prod_NS["student-app-prod\nhttp://prod.student.local:8080"]
+        ArgoCD -->|"PullRequest Generator\n'preview' label"| PR_NS["student-app-pr-{N}\nhttp://pr-{N}.student.local:8080\n(ephemeral)"]
+        Reg -->|"imagePullPolicy: Always"| Dev_NS
+        Reg -->|"imagePullPolicy: Always"| Prod_NS
+        Reg -->|"imagePullPolicy: Always"| PR_NS
+    end
+```
+
+### Three Pipeline Flows
+
+| Pipeline | Trigger | Image Tag | Environment | Auto-Cleanup |
+|----------|---------|-----------|-------------|--------------|
+| **PR Preview** | PR opened + `preview` label | `pr-{N}-{8-char-sha}` | `student-app-pr-{N}` (ephemeral) | Yes — on PR close |
+| **Dev** | Push to `dev` branch | `dev-{7-char-sha}` | `student-app-dev` (permanent) | No |
+| **Prod** | Push to `main` branch | same as dev (no rebuild) | `student-app-prod` (permanent) | No |
+
+### Key Components
+
+| Component | Location | Purpose |
+|-----------|----------|---------|
+| List Generator ApplicationSet | `gitops/argocd/applicationsets/environments.yaml` | Manages dev + prod Applications |
+| PullRequest Generator ApplicationSet | `gitops/argocd/applicationsets/pr-preview.yaml` | Creates ephemeral PR preview Applications |
+| Kustomize base | `gitops/environments/base/` | Generic manifests (namespace-agnostic) |
+| Dev overlay | `gitops/environments/overlays/dev/` | Dev config + image tags (CI-updated) |
+| Prod overlay | `gitops/environments/overlays/prod/` | Prod config + image tags (promoted from dev) |
+| Preview overlay | `gitops/environments/overlays/preview/` | Shared template (values injected by ApplicationSet) |
+| Jenkins pipelines | `jenkins/pipelines/` | Jenkinsfile.pr-preview, .dev, .prod |
+| Setup scripts | `scripts/setup-*.sh` | Registry, ArgoCD, Jenkins, Keycloak clients |
+
+### Quick Start — GitOps Infrastructure
+
+```bash
+# 1. Start base infrastructure (cluster + Keycloak)
+./setup.sh
+
+# 2. Setup GitOps layer (ArgoCD + Nginx Ingress + CoreDNS + ApplicationSets)
+bash scripts/setup-argocd.sh
+
+# 3. Create Keycloak clients for dev and prod environments
+bash scripts/setup-keycloak-envs.sh
+
+# 4. Register GitHub token for PR generator
+kubectl create secret generic github-token --namespace argocd --from-literal=token=YOUR_GITHUB_PAT
+
+# 5. Add /etc/hosts entries
+echo "127.0.0.1 dev.student.local prod.student.local" | sudo tee -a /etc/hosts
+
+# 6. Verify ArgoCD
+kubectl port-forward svc/argocd-server -n argocd 30080:80 &
+argocd login localhost:30080 --insecure --username admin \
+  --password "$(kubectl -n argocd get secret argocd-initial-admin-secret \
+  -o jsonpath='{.data.password}' | base64 -d)"
+argocd app list
+```
+
+### GitOps Environment URLs
+
+| Environment | URL | ArgoCD Application | Git Branch |
+|-------------|-----|--------------------|------------|
+| Dev | http://dev.student.local:8080 | `student-app-dev` | `dev` |
+| Prod | http://prod.student.local:8080 | `student-app-prod` | `main` |
+| PR Preview | http://pr-{N}.student.local:8080 | `student-app-pr-{N}` | PR head SHA |
+| ArgoCD UI | http://localhost:30080 | — | — |
+| Local Registry | http://localhost:5001/v2/_catalog | — | — |
+
+### Notable Design Decisions
+
+- **No `containerdConfigPatches`** — this field crashes the kubelet on macOS + Docker Desktop + kindest/node:v1.35. The registry mirror is configured post-cluster-creation by `scripts/setup-registry.sh`.
+- **Single preview overlay** — the `preview/` overlay has no PR-specific files. All per-PR values (image tag, APP_URL, client ID, Ingress host, client secret) are injected inline by the ApplicationSet PullRequest Generator template.
+- **8-char SHA for PR images** — ArgoCD's `{{head_short_sha}}` is 8 characters. Image tags must be `pr-{N}-{8-char-sha}`.
+- **Per-env client secrets** — Each environment has its own Keycloak client with a unique secret. The Kustomize base has a placeholder; each overlay's `secret-patch.yaml` replaces it.
+- **CoreDNS override replaces hostAliases** — All pods resolve `idp.keycloak.com` via a CoreDNS `hosts` block, eliminating the need for `hostAliases` in any deployment manifest.
+
+### Full Test Guide
+
+See [`cicd-test-instruction.md`](cicd-test-instruction.md) for the complete step-by-step instructions to test all three pipeline phases with exact shell commands.
+
+See [`plans/5-argocd-gitops-multi-env-pipeline.md`](plans/5-argocd-gitops-multi-env-pipeline.md) for the full architecture plan document.
 
 ---
 
