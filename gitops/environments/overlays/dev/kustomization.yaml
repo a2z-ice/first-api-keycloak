@@ -10,10 +10,10 @@ resources:
 images:
   - name: fastapi-student-app
     newName: localhost:5001/fastapi-student-app
-    newTag: dev-a65c3ff
+    newTag: dev-6092488
   - name: frontend-student-app
     newName: localhost:5001/frontend-student-app
-    newTag: dev-a65c3ff
+    newTag: dev-6092488
 
 patches:
   - path: patches/config-patch.yaml
