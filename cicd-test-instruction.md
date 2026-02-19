@@ -95,6 +95,17 @@ This creates the cluster, Keycloak StatefulSet, realm, test users, Python venv, 
 > - Does NOT use `containerdConfigPatches` (causes kubelet crash on macOS + kindest/node:v1.35)
 > - Uses Kind native `labels: {ingress-ready: "true"}` instead of `kubeadmConfigPatches`
 > - Maps `containerPort: 80 → hostPort: 8080` for Nginx Ingress
+> - Maps `containerPort: 30080 → hostPort: 30080` and `30081 → 30081` for ArgoCD NodePort (HTTP + HTTPS)
+>
+> **For clusters created before this fix:** ArgoCD NodePorts aren't exposed. Start Docker proxy containers:
+> ```bash
+> NODE_IP=$(kubectl get nodes -o jsonpath='{.items[0].status.addresses[?(@.type=="InternalIP")].address}')
+> docker run -d --name argocd-http-proxy --network kind --restart unless-stopped \
+>   -p 30080:30080 alpine/socat TCP-LISTEN:30080,fork,reuseaddr TCP:${NODE_IP}:30080
+> docker run -d --name argocd-https-proxy --network kind --restart unless-stopped \
+>   -p 30081:30081 alpine/socat TCP-LISTEN:30081,fork,reuseaddr TCP:${NODE_IP}:30081
+> ```
+> New clusters (created with the updated `kind-config.yaml`) expose these ports natively.
 
 ### Step 2: Setup Keycloak (base infrastructure)
 
@@ -121,10 +132,7 @@ This installs:
 
 Verify ArgoCD is ready:
 ```bash
-# Port-forward (if NodePort 30080 is not mapped)
-kubectl port-forward svc/argocd-server -n argocd 30080:80 &
-
-# Login
+# Login directly via NodePort (no port-forward needed)
 argocd login localhost:30080 --insecure --username admin \
   --password "$(kubectl -n argocd get secret argocd-initial-admin-secret \
   -o jsonpath='{.data.password}' | base64 -d)"
@@ -249,7 +257,8 @@ Pre-installed Jenkins plugins (baked into the image):
 
 | Credential | Value | How to retrieve |
 |---|---|---|
-| ArgoCD UI URL | http://localhost:30080 | NodePort — accessible from host |
+| ArgoCD UI (HTTP) | http://localhost:30080 | NodePort — redirects to HTTPS |
+| ArgoCD UI (HTTPS) | https://localhost:30081 | NodePort — direct HTTPS access |
 | ArgoCD username | `admin` | Fixed |
 | ArgoCD password | (auto-generated on install) | `kubectl -n argocd get secret argocd-initial-admin-secret -o jsonpath='{.data.password}' \| base64 -d` |
 
@@ -260,7 +269,7 @@ ARGOCD_PASSWORD=$(kubectl -n argocd get secret argocd-initial-admin-secret \
 echo "ArgoCD password: $ARGOCD_PASSWORD"
 ```
 
-Login via CLI:
+Login via CLI (NodePort, no port-forward required):
 ```bash
 argocd login localhost:30080 --insecure --username admin --password "$ARGOCD_PASSWORD"
 ```
@@ -473,10 +482,6 @@ ArgoCD polls GitHub every 3 minutes (or use webhook). It will detect the commit 
 ### 1.3 Wait for ArgoCD sync
 
 ```bash
-# Port-forward if needed
-kubectl port-forward svc/argocd-server -n argocd 30080:80 &>/dev/null &
-sleep 2
-
 # Trigger immediate hard refresh (skip the 3-minute poll delay)
 argocd app get student-app-dev --hard-refresh
 
@@ -1017,6 +1022,32 @@ ArgoCD needs a successful GitHub API call to detect the closed PR. If network is
 argocd app delete student-app-pr-1 --cascade
 ```
 
+### ArgoCD UI not accessible at localhost:30080
+
+The `kind-config.yaml` now includes `extraPortMappings` for ports 30080 and 30081. Clusters created with the updated config expose these ports natively.
+
+**For clusters created before this fix** (missing those mappings), start Docker proxy containers:
+```bash
+NODE_IP=$(kubectl get nodes -o jsonpath='{.items[0].status.addresses[?(@.type=="InternalIP")].address}')
+
+# HTTP (redirects to HTTPS)
+docker run -d --name argocd-http-proxy --network kind --restart unless-stopped \
+  -p 30080:30080 alpine/socat TCP-LISTEN:30080,fork,reuseaddr TCP:${NODE_IP}:30080
+
+# HTTPS
+docker run -d --name argocd-https-proxy --network kind --restart unless-stopped \
+  -p 30081:30081 alpine/socat TCP-LISTEN:30081,fork,reuseaddr TCP:${NODE_IP}:30081
+```
+
+Verify:
+```bash
+docker ps --filter name=argocd --format "{{.Names}}: {{.Ports}}"
+curl -s -o /dev/null -w "%{http_code}" http://localhost:30080
+# Expected: 307 (redirect to HTTPS)
+```
+
+The proxy containers have `--restart unless-stopped` so they survive Docker Desktop restarts.
+
 ### `containerdConfigPatches` crashes kubelet on cluster create
 
 Do NOT add `containerdConfigPatches` to `cluster/kind-config.yaml`. The registry mirror is configured post-creation by `setup-registry.sh` via `docker exec` writing to `/etc/containerd/certs.d/localhost:5001/hosts.toml` inside the Kind node.
@@ -1084,9 +1115,9 @@ If the cluster and infrastructure already exist, start here:
 # 1. Verify cluster is running
 kubectl cluster-info
 
-# 2. Restore ArgoCD port-forward
-kubectl port-forward svc/argocd-server -n argocd 30080:80 &>/dev/null &
-sleep 2
+# 2. Login to ArgoCD (direct NodePort — no port-forward needed)
+#    Ensure Docker proxy containers are running if cluster predates kind-config.yaml fix:
+#      docker ps | grep argocd-http-proxy  → should show 0.0.0.0:30080->30080
 argocd login localhost:30080 --insecure --username admin \
   --password "$(kubectl -n argocd get secret argocd-initial-admin-secret \
   -o jsonpath='{.data.password}' | base64 -d)"
@@ -1123,7 +1154,8 @@ docker ps | grep jenkins
 | Dev App | http://dev.student.local:8080 | ArgoCD syncs from `dev` branch |
 | Prod App | http://prod.student.local:8080 | ArgoCD syncs from `main` branch |
 | PR Preview | http://pr-{N}.student.local:8080 | Ephemeral; created when PR labeled `preview` |
-| ArgoCD UI | http://localhost:30080 | admin / (see `argocd-initial-admin-secret`) |
+| ArgoCD UI (HTTP) | http://localhost:30080 | NodePort — redirects to HTTPS; admin / (see `argocd-initial-admin-secret`) |
+| ArgoCD UI (HTTPS) | https://localhost:30081 | NodePort — direct HTTPS access |
 | Jenkins UI | http://localhost:8090 | admin / (see `initialAdminPassword`) |
 | Keycloak | https://idp.keycloak.com:31111 | admin / admin |
 | Local Registry | http://localhost:5001/v2/_catalog | registry:2 container |

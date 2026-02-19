@@ -256,7 +256,7 @@ If you prefer to set up components individually:
 
 This creates:
 - Self-signed CA + TLS certificates for `idp.keycloak.com`
-- Kind cluster with NodePort mappings (31111, 30000, 32000)
+- Kind cluster with NodePort mappings (31111, 30000, 32000, 30080, 30081)
 - Keycloak namespace with PostgreSQL + Keycloak StatefulSet (3 replicas)
 - `student-mgmt` realm with OAuth client + 3 test users
 - Python virtual environment + Node.js dependencies
@@ -469,8 +469,7 @@ kubectl create secret generic github-token --namespace argocd --from-literal=tok
 # 5. Add /etc/hosts entries
 echo "127.0.0.1 dev.student.local prod.student.local" | sudo tee -a /etc/hosts
 
-# 6. Verify ArgoCD
-kubectl port-forward svc/argocd-server -n argocd 30080:80 &
+# 6. Verify ArgoCD (NodePort — no port-forward needed)
 argocd login localhost:30080 --insecure --username admin \
   --password "$(kubectl -n argocd get secret argocd-initial-admin-secret \
   -o jsonpath='{.data.password}' | base64 -d)"
@@ -484,7 +483,8 @@ argocd app list
 | Dev | http://dev.student.local:8080 | `student-app-dev` | `dev` |
 | Prod | http://prod.student.local:8080 | `student-app-prod` | `main` |
 | PR Preview | http://pr-{N}.student.local:8080 | `student-app-pr-{N}` | PR head SHA |
-| ArgoCD UI | http://localhost:30080 | — | — |
+| ArgoCD UI (HTTP) | http://localhost:30080 | — | — (redirects to HTTPS) |
+| ArgoCD UI (HTTPS) | https://localhost:30081 | — | — |
 | Local Registry | http://localhost:5001/v2/_catalog | — | — |
 
 ### Notable Design Decisions
@@ -606,7 +606,7 @@ keycloak/
 │       └── realm-setup.sh            # Creates realm, client, roles, users
 │
 ├── cluster/
-│   ├── kind-config.yaml              # Kind cluster (ports: 31111, 30000, 32000)
+│   ├── kind-config.yaml              # Kind cluster (ports: 31111, 30000, 32000, 30080/30081)
 │   └── namespace.yaml                # 'keycloak' namespace
 │
 ├── certs/
@@ -752,6 +752,8 @@ TTL: 14 days")]
 |---------|------|---------------|
 | Frontend (Nginx) | NodePort | **30000** |
 | Keycloak | NodePort | **31111** |
+| ArgoCD (HTTP) | NodePort | **30080** → redirects to HTTPS |
+| ArgoCD (HTTPS) | NodePort | **30081** |
 | FastAPI Backend | ClusterIP | Internal only |
 | Redis | ClusterIP | Internal only |
 | PostgreSQL (both) | ClusterIP | Internal only |
@@ -873,6 +875,7 @@ pip install -r requirements.txt
 | Script | Description | Usage |
 |--------|-------------|-------|
 | `scripts/clean-deploy-test.sh` | Full lifecycle: clean, deploy, test | `./scripts/clean-deploy-test.sh` |
+| `scripts/clean-and-redeploy.sh` | Full clean + cluster recreate + build + deploy + test | `./scripts/clean-and-redeploy.sh` |
 | `scripts/build-test-deploy.sh` | Build + deploy + test (cluster must exist) | `./scripts/build-test-deploy.sh` |
 | `scripts/build-test-deploy.sh --deploy-only` | Build + deploy, skip tests | |
 | `scripts/build-test-deploy.sh --test-only` | Test already-deployed app | |
@@ -881,5 +884,8 @@ pip install -r requirements.txt
 | `scripts/run-tests.sh` | Test runner with flags | `./scripts/run-tests.sh --deployed` |
 | `scripts/test-fail-screenshot.sh` | Fail-screenshot demo: runs a failing test, verifies screenshot capture | `./scripts/test-fail-screenshot.sh` |
 | `scripts/verify-deployment.sh` | Check deployment health | `./scripts/verify-deployment.sh` |
+| `scripts/wait-for-keycloak.sh` | Poll Keycloak readiness (300s timeout) | `./scripts/wait-for-keycloak.sh` |
+| `scripts/setup-infrastructure.sh` | GitOps: registry + ArgoCD + Jenkins + Keycloak clients | `./scripts/setup-infrastructure.sh` |
+| `scripts/cicd-pipeline-test.sh` | Automated GitOps pipeline test (dev → PR preview → prod) | `GITHUB_TOKEN=<pat> ./scripts/cicd-pipeline-test.sh --skip-setup` |
 
 

@@ -128,45 +128,46 @@ check_prerequisites() {
 }
 
 # ──────────────────────────────────────────────────────────────────────────────
-# ArgoCD port-forward management
+# ArgoCD login via NodePort (no port-forward needed)
+#
+# cluster/kind-config.yaml maps containerPort 30080 → hostPort 30080.
+# For clusters created before this fix, two Docker proxy containers handle it:
+#   docker run -d --name argocd-http-proxy --network kind -p 30080:30080 \
+#     alpine/socat TCP-LISTEN:30080,fork,reuseaddr TCP:<NODE_IP>:30080
+#   docker run -d --name argocd-https-proxy --network kind -p 30081:30081 \
+#     alpine/socat TCP-LISTEN:30081,fork,reuseaddr TCP:<NODE_IP>:30081
 # ──────────────────────────────────────────────────────────────────────────────
-ARGOCD_PF_PID=""
+setup_argocd_login() {
+  log_info "Waiting for ArgoCD to be reachable at localhost:${ARGOCD_LOCAL_PORT} (NodePort)..."
+  local retries=0
+  until curl -sf --max-time 3 "http://localhost:${ARGOCD_LOCAL_PORT}" &>/dev/null; do
+    retries=$(( retries + 1 ))
+    if [[ $retries -ge 24 ]]; then
+      log_error "ArgoCD not reachable at localhost:${ARGOCD_LOCAL_PORT} after ${retries} attempts."
+      log_error "cluster/kind-config.yaml now maps ports 30080/30081 — recreate the cluster"
+      log_error "or start Docker proxy containers for the existing cluster:"
+      NODE_IP=$(kubectl get nodes -o jsonpath='{.items[0].status.addresses[?(@.type=="InternalIP")].address}' 2>/dev/null || echo "172.19.0.2")
+      log_error "  docker run -d --name argocd-http-proxy --network kind -p 30080:30080 \\"
+      log_error "    alpine/socat TCP-LISTEN:30080,fork,reuseaddr TCP:${NODE_IP}:30080"
+      exit 1
+    fi
+    log_info "ArgoCD not ready (attempt ${retries}/24), retrying in 5s..."
+    sleep 5
+  done
 
-start_argocd_portforward() {
-  # Kill any existing port-forward on the port
-  kill_argocd_portforward
-
-  log_info "Starting ArgoCD port-forward on localhost:${ARGOCD_LOCAL_PORT}..."
-  kubectl port-forward svc/argocd-server -n argocd \
-    "${ARGOCD_LOCAL_PORT}:80" &>/dev/null &
-  ARGOCD_PF_PID=$!
-  sleep 3
-
-  # Login
   local password
   password=$(kubectl -n argocd get secret argocd-initial-admin-secret \
     -o jsonpath='{.data.password}' | base64 -d)
   argocd login "localhost:${ARGOCD_LOCAL_PORT}" \
     --username admin --password "$password" --insecure &>/dev/null
-  log_success "ArgoCD CLI logged in (port-forward PID: $ARGOCD_PF_PID)"
-}
-
-kill_argocd_portforward() {
-  # Kill all port-forwards on the ArgoCD port
-  local pids
-  pids=$(lsof -ti "tcp:${ARGOCD_LOCAL_PORT}" 2>/dev/null || true)
-  if [[ -n "$pids" ]]; then
-    echo "$pids" | xargs kill 2>/dev/null || true
-  fi
-  ARGOCD_PF_PID=""
+  log_success "ArgoCD CLI logged in via NodePort localhost:${ARGOCD_LOCAL_PORT}"
 }
 
 # ──────────────────────────────────────────────────────────────────────────────
 # Cleanup trap
 # ──────────────────────────────────────────────────────────────────────────────
 cleanup() {
-  echo -e "\n${YELLOW}[cleanup]${NC} Killing background processes..."
-  kill_argocd_portforward
+  echo -e "\n${YELLOW}[cleanup]${NC} Restoring git branch..."
   # Restore original git branch
   if [[ -n "${ORIGINAL_BRANCH:-}" ]]; then
     git -C "$PROJECT_DIR" checkout "$ORIGINAL_BRANCH" &>/dev/null 2>&1 || true
@@ -987,8 +988,8 @@ main() {
     fi
   fi
 
-  # Start ArgoCD port-forward (needed for all phases)
-  start_argocd_portforward
+  # Login to ArgoCD via NodePort (no port-forward needed)
+  setup_argocd_login
 
   # Verify ArgoCD apps exist (may show ComparisonError until branches have overlays)
   log_step "Checking ArgoCD applications"
