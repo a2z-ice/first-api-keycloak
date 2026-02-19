@@ -29,3 +29,12 @@ frontend/test-results/
 
 # OS
 .DS_Store
+
+# GitOps — never commit per-PR overlay files (ArgoCD parameterizes in-memory)
+gitops/environments/overlays/pr-*/
+
+# Jenkins home volume data
+jenkins/data/
+
+# Jenkins kubeconfig (generated at runtime with real node IP)
+jenkins/kind-jenkins.config

@@ -1,0 +1,61 @@
+apiVersion: argoproj.io/v1alpha1
+kind: ApplicationSet
+metadata:
+  name: student-app-pr-preview
+  namespace: argocd
+spec:
+  generators:
+    - pullRequest:
+        github:
+          owner: a2z-ice
+          repo: first-api-keycloak
+          tokenRef:
+            secretName: github-token
+            key: token
+          labels:
+            - preview
+        requeueAfterSeconds: 30
+  template:
+    metadata:
+      name: 'student-app-pr-{{number}}'
+    spec:
+      project: default
+      source:
+        repoURL: https://github.com/a2z-ice/first-api-keycloak.git
+        targetRevision: '{{head_sha}}'
+        path: gitops/environments/overlays/preview
+        kustomize:
+          namespace: 'student-app-pr-{{number}}'
+          images:
+            - 'fastapi-student-app=localhost:5001/fastapi-student-app:pr-{{number}}-{{head_short_sha}}'
+            - 'frontend-student-app=localhost:5001/frontend-student-app:pr-{{number}}-{{head_short_sha}}'
+          patches:
+            - target:
+                kind: ConfigMap
+                name: fastapi-app-config
+              patch: |
+                - op: replace
+                  path: /data/APP_URL
+                  value: http://pr-{{number}}.student.local:8080
+                - op: replace
+                  path: /data/FRONTEND_URL
+                  value: http://pr-{{number}}.student.local:8080
+                - op: replace
+                  path: /data/KEYCLOAK_CLIENT_ID
+                  value: student-app-pr-{{number}}
+            - target:
+                kind: Ingress
+                name: frontend-ingress
+              patch: |
+                - op: replace
+                  path: /spec/rules/0/host
+                  value: pr-{{number}}.student.local
+      destination:
+        server: https://kubernetes.default.svc
+        namespace: 'student-app-pr-{{number}}'
+      syncPolicy:
+        automated:
+          prune: true
+          selfHeal: true
+        syncOptions:
+          - CreateNamespace=true

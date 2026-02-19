@@ -1,0 +1,99 @@
+// Jenkinsfile.prod — Prod Deploy Pipeline
+// Triggered by: Push to 'main' branch (from merged dev→prod PR)
+// Reuses the same image tag validated in dev (no rebuild)
+// Requires credentials: GITHUB_TOKEN, ARGOCD_PASSWORD
+pipeline {
+    agent any
+
+    options {
+        ansiColor('xterm')
+        timeout(time: 30, unit: 'MINUTES')
+        buildDiscarder(logRotator(numToKeepStr: '10'))
+    }
+
+    environment {
+        REGISTRY      = 'localhost:5001'
+        GITHUB_REPO   = 'a2z-ice/first-api-keycloak'
+        ARGOCD_SERVER = 'localhost:30080'
+        APP_URL       = 'http://prod.student.local:8080'
+    }
+
+    stages {
+        stage('Read Dev Image Tag') {
+            steps {
+                script {
+                    // Read the image tag that was validated on dev — reuse it for prod (no rebuild)
+                    def kustomizationYaml = readFile('gitops/environments/overlays/dev/kustomization.yaml')
+                    def tagMatch = kustomizationYaml =~ /newTag:\s*(dev-\S+)/
+                    if (!tagMatch) {
+                        error("Could not parse image tag from dev kustomization.yaml")
+                    }
+                    env.PROD_TAG = tagMatch[0][1]
+                    echo "Promoting image tag to prod: ${env.PROD_TAG}"
+                }
+            }
+        }
+
+        stage('Update Prod Overlay') {
+            steps {
+                sh """
+                    sed -i 's|newTag: .*|newTag: ${env.PROD_TAG}|g' \\
+                        gitops/environments/overlays/prod/kustomization.yaml
+                """
+                sh """
+                    git config user.email "jenkins@ci.local"
+                    git config user.name "Jenkins CI"
+                    git add gitops/environments/overlays/prod/kustomization.yaml
+                    git commit -m "ci: promote ${env.PROD_TAG} to prod"
+                """
+                withCredentials([string(credentialsId: 'GITHUB_TOKEN', variable: 'GH_TOKEN')]) {
+                    sh """
+                        git remote set-url origin https://x-access-token:\${GH_TOKEN}@github.com/${GITHUB_REPO}.git
+                        git push origin main
+                        echo "Pushed overlay update to main branch — ArgoCD will auto-sync student-app-prod"
+                    """
+                }
+            }
+        }
+
+        stage('Wait for ArgoCD Sync') {
+            steps {
+                withCredentials([string(credentialsId: 'ARGOCD_PASSWORD', variable: 'ARGOCD_PASS')]) {
+                    sh """
+                        argocd login ${ARGOCD_SERVER} --username admin --password \${ARGOCD_PASS} --insecure
+                        argocd app wait student-app-prod --health --sync --timeout 180
+                    """
+                }
+            }
+        }
+
+        stage('E2E Tests') {
+            steps {
+                dir('frontend') {
+                    sh "npm ci"
+                    sh "npx playwright install --with-deps chromium"
+                    sh "APP_URL=${APP_URL} npx playwright test --reporter=html"
+                }
+            }
+            post {
+                always {
+                    archiveArtifacts artifacts: 'frontend/playwright-report/**', allowEmptyArchive: true
+                    publishHTML(target: [
+                        reportDir: 'frontend/playwright-report',
+                        reportFiles: 'index.html',
+                        reportName: 'Playwright E2E Report'
+                    ])
+                }
+            }
+        }
+    }
+
+    post {
+        success {
+            echo "Prod deployment of ${env.PROD_TAG} successful — all E2E tests passed!"
+        }
+        failure {
+            echo "Prod E2E tests FAILED for tag ${env.PROD_TAG}. Manual investigation required."
+        }
+    }
+}

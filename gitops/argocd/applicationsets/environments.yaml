@@ -1,0 +1,35 @@
+apiVersion: argoproj.io/v1alpha1
+kind: ApplicationSet
+metadata:
+  name: student-app-environments
+  namespace: argocd
+spec:
+  generators:
+    - list:
+        elements:
+          - env: dev
+            namespace: student-app-dev
+            branch: dev
+            host: dev.student.local
+          - env: prod
+            namespace: student-app-prod
+            branch: main
+            host: prod.student.local
+  template:
+    metadata:
+      name: 'student-app-{{env}}'
+    spec:
+      project: default
+      source:
+        repoURL: https://github.com/a2z-ice/first-api-keycloak.git
+        targetRevision: '{{branch}}'
+        path: 'gitops/environments/overlays/{{env}}'
+      destination:
+        server: https://kubernetes.default.svc
+        namespace: '{{namespace}}'
+      syncPolicy:
+        automated:
+          prune: true
+          selfHeal: true
+        syncOptions:
+          - CreateNamespace=true

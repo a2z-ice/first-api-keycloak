@@ -9,6 +9,11 @@ echo " Keycloak OAuth2.1 Student Management Setup"
 echo "============================================"
 echo ""
 
+# ---- Step 0: Start Local Docker Registry ----
+echo "==> Step 0: Starting local Docker registry..."
+bash "$PROJECT_DIR/scripts/setup-registry.sh"
+echo ""
+
 # ---- Step 1: Generate TLS Certificates ----
 echo "==> Step 1: Generating TLS certificates..."
 bash "$PROJECT_DIR/certs/generate-certs.sh"
@@ -21,6 +26,9 @@ if kind get clusters 2>/dev/null | grep -q "$CLUSTER_NAME"; then
 else
     kind create cluster --name "$CLUSTER_NAME" --config "$PROJECT_DIR/cluster/kind-config.yaml"
 fi
+
+# Connect registry to kind network after cluster creation
+docker network connect kind registry 2>/dev/null || true
 kubectl cluster-info --context "kind-${CLUSTER_NAME}"
 echo ""
 
@@ -105,3 +113,10 @@ echo " Then open: http://localhost:5173"
 echo ""
 echo " Make sure '127.0.0.1 idp.keycloak.com' is in /etc/hosts"
 echo "============================================"
+echo ""
+
+# ---- Optional: Setup GitOps Infrastructure ----
+echo "==> Optional: Setting up ArgoCD GitOps infrastructure..."
+echo "    (Skipping by default. Run manually when ready:)"
+echo "    bash scripts/setup-infrastructure.sh"
+echo ""

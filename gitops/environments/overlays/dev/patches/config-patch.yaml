@@ -1,0 +1,9 @@
+- op: replace
+  path: /data/APP_URL
+  value: http://dev.student.local:8080
+- op: replace
+  path: /data/FRONTEND_URL
+  value: http://dev.student.local:8080
+- op: replace
+  path: /data/KEYCLOAK_CLIENT_ID
+  value: student-app-dev

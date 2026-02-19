@@ -52,6 +52,24 @@ cd frontend && npx playwright test --reporter=html
 
 **Prerequisites:** `127.0.0.1 idp.keycloak.com` must be in `/etc/hosts`. Requires kind, kubectl, docker, python3, node/npm, and Playwright browsers (`npx playwright install`).
 
+## ArgoCD GitOps Pipeline Commands
+
+```bash
+# Setup full GitOps infrastructure (registry + ArgoCD + Jenkins + Keycloak clients)
+./scripts/setup-infrastructure.sh
+
+# Setup individual components
+./scripts/setup-registry.sh          # Start local Docker registry on localhost:5001
+./scripts/setup-argocd.sh            # Install ArgoCD v3.0.x + Nginx Ingress + CoreDNS patch
+./scripts/setup-jenkins.sh           # Generate kubeconfig + start Jenkins via docker compose
+./scripts/setup-keycloak-envs.sh     # Create dev + prod Keycloak clients
+
+# Verify infrastructure
+curl http://localhost:5001/v2/_catalog    # Registry: {"repositories":[...]}
+argocd app list                          # Shows student-app-dev and student-app-prod
+kubectl get ns | grep student-app        # List environment namespaces
+```
+
 ## Architecture
 
 ### BFF (Backend-for-Frontend) Pattern
@@ -183,3 +201,40 @@ Test users: `admin-user`/`admin123` (admin), `student-user`/`student123` (studen
 - `app-deployment.yaml` uses `__NODE_IP__` placeholder for `hostAliases`
 - Deploy scripts update Keycloak client redirect URIs to include port 30000
 - Playwright HTML reports generated at `frontend/playwright-report/index.html`
+
+## ArgoCD GitOps Architecture
+
+### Environment URLs
+
+| Service | URL | Notes |
+|---------|-----|-------|
+| Jenkins UI | http://localhost:8090 | `docker exec jenkins cat /var/jenkins_home/secrets/initialAdminPassword` |
+| Local Registry | http://localhost:5001/v2/_catalog | registry:2 container |
+| ArgoCD UI | http://localhost:30080 | `kubectl -n argocd get secret argocd-initial-admin-secret -o jsonpath='{.data.password}' \| base64 -d` |
+| Dev App | http://dev.student.local:8080 | Add `127.0.0.1 dev.student.local` to /etc/hosts |
+| Prod App | http://prod.student.local:8080 | Add `127.0.0.1 prod.student.local` to /etc/hosts |
+| PR Preview | http://pr-{N}.student.local:8080 | Added/removed dynamically by Jenkins |
+
+### Key GitOps Files
+
+- `gitops/argocd/applicationsets/environments.yaml` — List Generator: manages dev + prod Applications
+- `gitops/argocd/applicationsets/pr-preview.yaml` — PullRequest Generator: creates ephemeral PR preview Applications
+- `gitops/argocd/secrets/github-token-secret.yaml` — Template for GitHub token secret (apply manually)
+- `gitops/environments/base/` — Kustomize base (no namespace, no env-specific values)
+- `gitops/environments/overlays/dev/` — Dev overlay (image tags updated by Jenkins CI)
+- `gitops/environments/overlays/prod/` — Prod overlay (promoted from dev after E2E pass)
+- `gitops/environments/overlays/preview/` — Shared PR preview template (values injected by ApplicationSet)
+- `jenkins/Dockerfile` + `jenkins/docker-compose.yml` — Jenkins with docker, kubectl, argocd CLI, gh CLI
+- `jenkins/pipelines/Jenkinsfile.pr-preview` — PR preview pipeline (build → push → label → wait → E2E → merge)
+- `jenkins/pipelines/Jenkinsfile.dev` — Dev pipeline (build → push → update overlay → wait → E2E → open PR)
+- `jenkins/pipelines/Jenkinsfile.prod` — Prod pipeline (reuse dev tag → update overlay → wait → E2E)
+
+### CoreDNS Override
+
+`setup-argocd.sh` patches CoreDNS so all pods resolve `idp.keycloak.com` to the Kind node IP — this removes the need for `hostAliases` in any deployment manifest.
+
+### Jenkins Credentials Required
+
+- `GITHUB_TOKEN` — GitHub PAT for `gh pr merge`, `gh pr create`, label management
+- `ARGOCD_PASSWORD` — ArgoCD admin password for `argocd` CLI commands
+- Git SSH key or HTTPS token — for pushing overlay commits to GitHub

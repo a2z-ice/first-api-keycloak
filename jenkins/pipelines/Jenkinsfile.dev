@@ -1,0 +1,137 @@
+// Jenkinsfile.dev — Dev Deploy Pipeline
+// Triggered by: Push to 'dev' branch (from merged PR)
+// Requires credentials: GITHUB_TOKEN, ARGOCD_PASSWORD, GIT_SSH_KEY (or GIT_TOKEN)
+pipeline {
+    agent any
+
+    options {
+        ansiColor('xterm')
+        timeout(time: 30, unit: 'MINUTES')
+        buildDiscarder(logRotator(numToKeepStr: '10'))
+    }
+
+    environment {
+        REGISTRY      = 'localhost:5001'
+        GITHUB_REPO   = 'a2z-ice/first-api-keycloak'
+        ARGOCD_SERVER = 'localhost:30080'
+        COMMIT_SHA    = "${env.GIT_COMMIT}"
+        SHORT_SHA     = "${env.GIT_COMMIT?.take(8) ?: 'unknown'}"
+        IMAGE_TAG     = "dev-${env.GIT_COMMIT?.take(8) ?: 'unknown'}"
+        FASTAPI_IMAGE = "localhost:5001/fastapi-student-app:dev-${env.GIT_COMMIT?.take(8) ?: 'unknown'}"
+        FRONTEND_IMAGE= "localhost:5001/frontend-student-app:dev-${env.GIT_COMMIT?.take(8) ?: 'unknown'}"
+        APP_URL       = 'http://dev.student.local:8080'
+    }
+
+    stages {
+        stage('Build Images') {
+            parallel {
+                stage('Build FastAPI') {
+                    steps {
+                        sh "docker build -t ${FASTAPI_IMAGE} ./backend"
+                    }
+                }
+                stage('Build Frontend') {
+                    steps {
+                        sh "docker build -t ${FRONTEND_IMAGE} ./frontend"
+                    }
+                }
+            }
+        }
+
+        stage('Push Images') {
+            parallel {
+                stage('Push FastAPI') {
+                    steps {
+                        sh "docker push ${FASTAPI_IMAGE}"
+                    }
+                }
+                stage('Push Frontend') {
+                    steps {
+                        sh "docker push ${FRONTEND_IMAGE}"
+                    }
+                }
+            }
+        }
+
+        stage('Update Dev Overlay') {
+            steps {
+                script {
+                    // Update image tags in kustomization.yaml to trigger ArgoCD sync
+                    sh """
+                        sed -i 's|newTag: dev-.*|newTag: ${IMAGE_TAG}|g' \\
+                            gitops/environments/overlays/dev/kustomization.yaml
+                    """
+                    sh """
+                        git config user.email "jenkins@ci.local"
+                        git config user.name "Jenkins CI"
+                        git add gitops/environments/overlays/dev/kustomization.yaml
+                        git commit -m "ci: update dev image tags to ${IMAGE_TAG}"
+                    """
+                    withCredentials([string(credentialsId: 'GITHUB_TOKEN', variable: 'GH_TOKEN')]) {
+                        sh """
+                            git remote set-url origin https://x-access-token:\${GH_TOKEN}@github.com/${GITHUB_REPO}.git
+                            git push origin dev
+                            echo "Pushed overlay update to dev branch — ArgoCD will auto-sync student-app-dev"
+                        """
+                    }
+                }
+            }
+        }
+
+        stage('Wait for ArgoCD Sync') {
+            steps {
+                withCredentials([string(credentialsId: 'ARGOCD_PASSWORD', variable: 'ARGOCD_PASS')]) {
+                    sh """
+                        argocd login ${ARGOCD_SERVER} --username admin --password \${ARGOCD_PASS} --insecure
+                        argocd app wait student-app-dev --health --sync --timeout 180
+                    """
+                }
+            }
+        }
+
+        stage('E2E Tests') {
+            steps {
+                dir('frontend') {
+                    sh "npm ci"
+                    sh "npx playwright install --with-deps chromium"
+                    sh "APP_URL=${APP_URL} npx playwright test --reporter=html"
+                }
+            }
+            post {
+                always {
+                    archiveArtifacts artifacts: 'frontend/playwright-report/**', allowEmptyArchive: true
+                    publishHTML(target: [
+                        reportDir: 'frontend/playwright-report',
+                        reportFiles: 'index.html',
+                        reportName: 'Playwright E2E Report'
+                    ])
+                }
+            }
+        }
+    }
+
+    post {
+        success {
+            echo "Dev E2E tests passed — opening promotion PR to main..."
+            withCredentials([string(credentialsId: 'GITHUB_TOKEN', variable: 'GH_TOKEN')]) {
+                sh """
+                    export GH_TOKEN=${GH_TOKEN}
+                    gh pr create \\
+                        --repo ${GITHUB_REPO} \\
+                        --base main \\
+                        --head dev \\
+                        --title "Promote dev→prod [${IMAGE_TAG}]" \\
+                        --body "Automated promotion after E2E pass on dev environment.
+Image tag: \`${IMAGE_TAG}\`
+Commit: ${COMMIT_SHA}
+
+This PR was automatically created by Jenkins after all E2E tests passed on the dev environment."
+                    echo "Promotion PR created. Merge it to trigger the prod pipeline."
+                """
+            }
+        }
+        failure {
+            echo "Dev E2E tests FAILED — promotion PR NOT created. Investigate the failure."
+        }
+    }
+}

@@ -1,0 +1,228 @@
+// Jenkinsfile.pr-preview — PR Preview Pipeline
+// Triggered by: GitHub webhook on PR opened/synchronized (Multibranch Pipeline)
+// Requires credentials: GITHUB_TOKEN, ARGOCD_PASSWORD
+pipeline {
+    agent any
+
+    options {
+        ansiColor('xterm')
+        timeout(time: 30, unit: 'MINUTES')
+        buildDiscarder(logRotator(numToKeepStr: '10'))
+    }
+
+    environment {
+        REGISTRY         = 'localhost:5001'
+        GITHUB_REPO      = 'a2z-ice/first-api-keycloak'
+        ARGOCD_SERVER    = 'localhost:30080'
+        KEYCLOAK_URL     = 'https://idp.keycloak.com:31111'
+        KEYCLOAK_REALM   = 'student-mgmt'
+        // PR_NUMBER and HEAD_SHA are set from env vars provided by GitHub Branch Source plugin
+        PR_NUMBER        = "${env.CHANGE_ID ?: 'unknown'}"
+        HEAD_SHA         = "${env.GIT_COMMIT}"
+        HEAD_SHORT_SHA   = "${env.GIT_COMMIT?.take(8) ?: 'unknown'}"
+        PR_HOST          = "pr-${env.CHANGE_ID ?: 'unknown'}.student.local"
+        APP_URL          = "http://pr-${env.CHANGE_ID ?: 'unknown'}.student.local:8080"
+        FASTAPI_IMAGE    = "${REGISTRY}/fastapi-student-app:pr-${env.CHANGE_ID ?: 'unknown'}-${env.GIT_COMMIT?.take(8) ?: 'unknown'}"
+        FRONTEND_IMAGE   = "${REGISTRY}/frontend-student-app:pr-${env.CHANGE_ID ?: 'unknown'}-${env.GIT_COMMIT?.take(8) ?: 'unknown'}"
+        ARGOCD_APP       = "student-app-pr-${env.CHANGE_ID ?: 'unknown'}"
+        KC_CLIENT_ID     = "student-app-pr-${env.CHANGE_ID ?: 'unknown'}"
+        KC_CLIENT_SECRET = "student-app-pr-${env.CHANGE_ID ?: 'unknown'}-secret"
+        PR_NS            = "student-app-pr-${env.CHANGE_ID ?: 'unknown'}"
+    }
+
+    stages {
+        stage('Validate PR') {
+            steps {
+                script {
+                    if (!env.CHANGE_ID) {
+                        error("This pipeline only runs for Pull Requests. CHANGE_ID is not set.")
+                    }
+                    echo "Building PR #${PR_NUMBER} — ${HEAD_SHA}"
+                }
+            }
+        }
+
+        stage('Build Images') {
+            parallel {
+                stage('Build FastAPI') {
+                    steps {
+                        sh "docker build -t ${FASTAPI_IMAGE} ./backend"
+                    }
+                }
+                stage('Build Frontend') {
+                    steps {
+                        sh "docker build -t ${FRONTEND_IMAGE} ./frontend"
+                    }
+                }
+            }
+        }
+
+        stage('Push Images') {
+            parallel {
+                stage('Push FastAPI') {
+                    steps {
+                        sh "docker push ${FASTAPI_IMAGE}"
+                    }
+                }
+                stage('Push Frontend') {
+                    steps {
+                        sh "docker push ${FRONTEND_IMAGE}"
+                    }
+                }
+            }
+        }
+
+        stage('Trigger ArgoCD PR Preview') {
+            steps {
+                withCredentials([string(credentialsId: 'GITHUB_TOKEN', variable: 'GH_TOKEN')]) {
+                    sh """
+                        export GH_TOKEN=${GH_TOKEN}
+                        gh pr edit ${PR_NUMBER} --repo ${GITHUB_REPO} --add-label preview
+                        echo "Added 'preview' label to PR #${PR_NUMBER}"
+                        echo "ArgoCD PullRequest Generator will create Application '${ARGOCD_APP}' within 30s"
+                    """
+                }
+            }
+        }
+
+        stage('Copy TLS Secret to Preview Namespace') {
+            steps {
+                script {
+                    // Wait for ArgoCD to create the namespace (up to 60s)
+                    sh """
+                        for i in \$(seq 1 12); do
+                            if kubectl get namespace ${PR_NS} 2>/dev/null; then
+                                echo "Namespace ${PR_NS} exists."
+                                break
+                            fi
+                            echo "Waiting for namespace ${PR_NS} (attempt \$i/12)..."
+                            sleep 5
+                        done
+                    """
+                    sh """
+                        kubectl get secret keycloak-tls -n keycloak -o yaml | \\
+                            sed 's/namespace: keycloak/namespace: ${PR_NS}/' | \\
+                            kubectl apply -f -
+                    """
+                }
+            }
+        }
+
+        stage('Wait for ArgoCD Sync') {
+            steps {
+                withCredentials([string(credentialsId: 'ARGOCD_PASSWORD', variable: 'ARGOCD_PASS')]) {
+                    sh """
+                        argocd login ${ARGOCD_SERVER} --username admin --password \${ARGOCD_PASS} --insecure
+                        argocd app wait ${ARGOCD_APP} --health --sync --timeout 180
+                    """
+                }
+            }
+        }
+
+        stage('Register Keycloak Client') {
+            steps {
+                sh """
+                    # Get admin token
+                    TOKEN=\$(curl -sf --insecure \\
+                        -d 'client_id=admin-cli' \\
+                        -d 'username=admin' \\
+                        -d 'password=admin' \\
+                        -d 'grant_type=password' \\
+                        '${KEYCLOAK_URL}/realms/master/protocol/openid-connect/token' \\
+                        | python3 -c "import sys,json; print(json.load(sys.stdin)['access_token'])")
+
+                    # Create client
+                    curl -sf --insecure \\
+                        -X POST \\
+                        -H "Authorization: Bearer \${TOKEN}" \\
+                        -H 'Content-Type: application/json' \\
+                        -d '{
+                          "clientId": "${KC_CLIENT_ID}",
+                          "enabled": true,
+                          "protocol": "openid-connect",
+                          "publicClient": false,
+                          "secret": "${KC_CLIENT_SECRET}",
+                          "redirectUris": ["${APP_URL}/api/auth/callback"],
+                          "webOrigins": ["${APP_URL}"],
+                          "standardFlowEnabled": true,
+                          "directAccessGrantsEnabled": false,
+                          "attributes": {"pkce.code.challenge.method": "S256"}
+                        }' \\
+                        '${KEYCLOAK_URL}/admin/realms/${KEYCLOAK_REALM}/clients' \\
+                        && echo "Keycloak client '${KC_CLIENT_ID}' created." \\
+                        || echo "Client may already exist, continuing."
+                """
+            }
+        }
+
+        stage('Add /etc/hosts Entry') {
+            steps {
+                sh "echo '127.0.0.1 ${PR_HOST}' | sudo tee -a /etc/hosts"
+            }
+        }
+
+        stage('Seed Database') {
+            steps {
+                sh """
+                    POD=\$(kubectl get pod -n ${PR_NS} -l app=fastapi-app -o jsonpath='{.items[0].metadata.name}')
+                    kubectl exec -n ${PR_NS} \${POD} -- python /app/scripts/create-test-data.py
+                """
+            }
+        }
+
+        stage('E2E Tests') {
+            steps {
+                dir('frontend') {
+                    sh "npm ci"
+                    sh "npx playwright install --with-deps chromium"
+                    sh "APP_URL=${APP_URL} npx playwright test --reporter=html"
+                }
+            }
+            post {
+                always {
+                    archiveArtifacts artifacts: 'frontend/playwright-report/**', allowEmptyArchive: true
+                    publishHTML(target: [
+                        reportDir: 'frontend/playwright-report',
+                        reportFiles: 'index.html',
+                        reportName: 'Playwright E2E Report'
+                    ])
+                }
+            }
+        }
+    }
+
+    post {
+        success {
+            echo "PR #${PR_NUMBER} E2E tests passed — merging PR..."
+            withCredentials([string(credentialsId: 'GITHUB_TOKEN', variable: 'GH_TOKEN')]) {
+                sh """
+                    export GH_TOKEN=${GH_TOKEN}
+                    gh pr merge ${PR_NUMBER} --repo ${GITHUB_REPO} --merge --admin
+                    echo "PR #${PR_NUMBER} merged. ArgoCD will auto-delete the preview environment."
+                """
+            }
+            // Clean up Keycloak client and /etc/hosts
+            sh """
+                TOKEN=\$(curl -sf --insecure \\
+                    -d 'client_id=admin-cli' -d 'username=admin' -d 'password=admin' -d 'grant_type=password' \\
+                    '${KEYCLOAK_URL}/realms/master/protocol/openid-connect/token' \\
+                    | python3 -c "import sys,json; print(json.load(sys.stdin)['access_token'])")
+                CLIENT_UUID=\$(curl -sf --insecure \\
+                    -H "Authorization: Bearer \${TOKEN}" \\
+                    '${KEYCLOAK_URL}/admin/realms/${KEYCLOAK_REALM}/clients?clientId=${KC_CLIENT_ID}' \\
+                    | python3 -c "import sys,json; c=json.load(sys.stdin); print(c[0]['id'] if c else '')")
+                if [ -n "\${CLIENT_UUID}" ]; then
+                    curl -sf --insecure -X DELETE \\
+                        -H "Authorization: Bearer \${TOKEN}" \\
+                        "${KEYCLOAK_URL}/admin/realms/${KEYCLOAK_REALM}/clients/\${CLIENT_UUID}" \\
+                        && echo "Deleted Keycloak client ${KC_CLIENT_ID}"
+                fi
+                sudo sed -i '' '/127.0.0.1 ${PR_HOST}/d' /etc/hosts || true
+            """
+        }
+        failure {
+            echo "PR #${PR_NUMBER} E2E tests FAILED — preview environment left running for investigation."
+            echo "Preview URL: ${APP_URL}"
+        }
+    }
+}

@@ -1,0 +1,26 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: student-app-dev
+
+resources:
+  - ../../base
+  - namespace.yaml
+
+images:
+  - name: fastapi-student-app
+    newName: localhost:5001/fastapi-student-app
+    newTag: dev-latest
+  - name: frontend-student-app
+    newName: localhost:5001/frontend-student-app
+    newTag: dev-latest
+
+patches:
+  - path: patches/config-patch.yaml
+    target:
+      kind: ConfigMap
+      name: fastapi-app-config
+  - path: patches/ingress-patch.yaml
+    target:
+      kind: Ingress
+      name: frontend-ingress
