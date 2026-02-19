@@ -50,6 +50,13 @@ spec:
                 - op: replace
                   path: /spec/rules/0/host
                   value: pr-{{number}}.student.local
+            - target:
+                kind: Secret
+                name: fastapi-app-secret
+              patch: |
+                - op: replace
+                  path: /stringData/KEYCLOAK_CLIENT_SECRET
+                  value: student-app-pr-{{number}}-secret
       destination:
         server: https://kubernetes.default.svc
         namespace: 'student-app-pr-{{number}}'

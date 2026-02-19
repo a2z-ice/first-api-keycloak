@@ -80,6 +80,22 @@ echo "    Applying ArgoCD ApplicationSets..."
 kubectl apply -f "${PROJECT_DIR}/gitops/argocd/applicationsets/environments.yaml"
 kubectl apply -f "${PROJECT_DIR}/gitops/argocd/applicationsets/pr-preview.yaml"
 
+# ---- Copy keycloak-tls secret to static env namespaces ----
+# ArgoCD CreateNamespace=true creates the namespaces, but we need the TLS secret
+# available for fastapi pods to mount. Done after ApplicationSet creation so
+# namespaces exist. For PR preview, the Jenkinsfile copies it per PR.
+echo "    Pre-creating dev/prod namespaces and copying TLS secret..."
+for NS in student-app-dev student-app-prod; do
+    kubectl create namespace "${NS}" --dry-run=client -o yaml | kubectl apply -f -
+    if kubectl get secret keycloak-tls -n keycloak &>/dev/null; then
+        kubectl get secret keycloak-tls -n keycloak -o yaml | \
+            sed "s/namespace: keycloak/namespace: ${NS}/" | \
+            kubectl apply -f - && echo "      TLS secret copied to ${NS}"
+    else
+        echo "      WARNING: keycloak-tls not found in keycloak ns yet — copy manually after Keycloak setup"
+    fi
+done
+
 # ---- Print credentials ----
 echo ""
 echo "==> ArgoCD setup complete!"
