@@ -271,9 +271,22 @@ add_hosts_entry() {
     log_info "$HOST already in /etc/hosts"
     return 0
   fi
-  log_warn "$HOST not found in /etc/hosts."
-  log_warn "Please run: echo '${IP} ${HOST}' | sudo tee -a /etc/hosts"
-  log_warn "Script continues — E2E tests will fail if $HOST is not resolvable."
+  local CMD="echo '${IP} ${HOST}' | sudo tee -a /etc/hosts"
+  while true; do
+    echo ""
+    echo -e "  ${YELLOW}${BOLD}╔══════════════════════════════════════════════════╗${NC}"
+    echo -e "  ${YELLOW}${BOLD}║  ACTION REQUIRED — /etc/hosts entry missing      ║${NC}"
+    echo -e "  ${YELLOW}${BOLD}╚══════════════════════════════════════════════════╝${NC}"
+    echo -e "  Run this command in another terminal:\n"
+    echo -e "    ${CYAN}${CMD}${NC}\n"
+    printf "  Press Enter once done (Ctrl+C to abort): "
+    read -r < /dev/tty
+    if grep -q "$HOST" /etc/hosts 2>/dev/null; then
+      log_success "$HOST confirmed in /etc/hosts"
+      return 0
+    fi
+    log_warn "$HOST not found yet — please run the command and press Enter again"
+  done
 }
 
 remove_hosts_entry() {
@@ -281,8 +294,80 @@ remove_hosts_entry() {
   if ! grep -q "$HOST" /etc/hosts 2>/dev/null; then
     return 0
   fi
-  log_warn "$HOST still in /etc/hosts."
-  log_warn "Please run: sudo sed -i '' '/${HOST}/d' /etc/hosts"
+  local CMD="sudo sed -i '' '/${HOST}/d' /etc/hosts"
+  while true; do
+    echo ""
+    echo -e "  ${YELLOW}${BOLD}╔══════════════════════════════════════════════════╗${NC}"
+    echo -e "  ${YELLOW}${BOLD}║  ACTION REQUIRED — remove /etc/hosts entry       ║${NC}"
+    echo -e "  ${YELLOW}${BOLD}╚══════════════════════════════════════════════════╝${NC}"
+    echo -e "  Run this command in another terminal:\n"
+    echo -e "    ${CYAN}${CMD}${NC}\n"
+    printf "  Press Enter once done (Ctrl+C to abort): "
+    read -r < /dev/tty
+    if ! grep -q "$HOST" /etc/hosts 2>/dev/null; then
+      log_success "$HOST removed from /etc/hosts"
+      return 0
+    fi
+    log_warn "$HOST still found — please run the command and press Enter again"
+  done
+}
+
+check_and_fix_coredns() {
+  log_step "Checking CoreDNS IP for idp.keycloak.com"
+  local NODE_IP
+  NODE_IP=$(kubectl get nodes \
+    -o jsonpath='{.items[0].status.addresses[?(@.type=="InternalIP")].address}' 2>/dev/null || echo "")
+  if [[ -z "$NODE_IP" ]]; then
+    log_warn "Could not determine node IP — skipping CoreDNS check"
+    return 0
+  fi
+  log_info "Kind node IP: $NODE_IP"
+
+  local COREFILE
+  COREFILE=$(kubectl get configmap coredns -n kube-system \
+    -o jsonpath='{.data.Corefile}' 2>/dev/null || echo "")
+  if [[ -z "$COREFILE" ]]; then
+    log_warn "Could not read CoreDNS Corefile — skipping CoreDNS check"
+    return 0
+  fi
+
+  local CURRENT_IP
+  CURRENT_IP=$(echo "$COREFILE" | grep "idp.keycloak.com" | awk '{print $1}' | head -1)
+  if [[ -z "$CURRENT_IP" ]]; then
+    log_warn "idp.keycloak.com not found in CoreDNS hosts — cluster may need full setup"
+    return 0
+  fi
+
+  if [[ "$CURRENT_IP" == "$NODE_IP" ]]; then
+    log_success "CoreDNS IP for idp.keycloak.com is correct ($NODE_IP)"
+    return 0
+  fi
+
+  log_warn "CoreDNS stale IP detected: $CURRENT_IP → should be $NODE_IP"
+  log_info "Auto-patching CoreDNS configmap..."
+
+  local NEW_COREFILE
+  NEW_COREFILE=$(echo "$COREFILE" \
+    | sed "s|${CURRENT_IP} idp.keycloak.com|${NODE_IP} idp.keycloak.com|g")
+  kubectl patch configmap coredns -n kube-system --type=merge \
+    -p "{\"data\":{\"Corefile\":$(echo "$NEW_COREFILE" \
+      | python3 -c "import sys,json; print(json.dumps(sys.stdin.read()))")}}"
+
+  log_info "Restarting CoreDNS..."
+  kubectl rollout restart deployment coredns -n kube-system
+  kubectl rollout status deployment coredns -n kube-system --timeout=60s 2>/dev/null || true
+
+  for ns in student-app-dev student-app-prod; do
+    if kubectl get deployment fastapi-app -n "$ns" &>/dev/null; then
+      log_info "Restarting fastapi-app in $ns"
+      kubectl rollout restart deployment fastapi-app -n "$ns"
+    fi
+  done
+  if kubectl get deployment fastapi-app -n student-app-dev &>/dev/null; then
+    kubectl rollout status deployment fastapi-app -n student-app-dev --timeout=120s 2>/dev/null || true
+  fi
+
+  log_success "CoreDNS patched ($CURRENT_IP → $NODE_IP) and pods restarted"
 }
 
 copy_tls_secret() {
@@ -554,6 +639,11 @@ phase2_pr_preview() {
   local PR_IMAGE_TAG="pr-${PR_NUMBER}-${PR_SHA}"
   log_info "PR image tag: $PR_IMAGE_TAG"
 
+  # Prompt for /etc/hosts NOW — before the long build/push/wait steps
+  # so the user can add it while the build runs.
+  local PR_HOST="pr-${PR_NUMBER}.student.local"
+  add_hosts_entry "$PR_HOST"
+
   # --- 2.2 Build and push PR images ---
   log_step "2.2 Building PR images"
 
@@ -672,10 +762,6 @@ phase2_pr_preview() {
   else
     log_info "Keycloak client student-app-pr-${PR_NUMBER} already exists"
   fi
-
-  # Add /etc/hosts entry
-  local PR_HOST="pr-${PR_NUMBER}.student.local"
-  add_hosts_entry "$PR_HOST"
 
   # Seed database
   KC_ID=$(get_keycloak_user_id "$ADMIN_TOKEN" "student-user")
@@ -885,6 +971,9 @@ main() {
       exit 1
     }
     log_success "Cluster is reachable"
+
+    # Auto-fix CoreDNS if node IP changed (e.g. cluster was recreated)
+    check_and_fix_coredns
 
     # Ensure github-token secret exists in ArgoCD namespace
     if ! kubectl get secret github-token -n argocd &>/dev/null; then
