@@ -1,5 +1,5 @@
-apiVersion: apps/v1
-kind: Deployment
+apiVersion: argoproj.io/v1alpha1
+kind: Rollout
 metadata:
   name: fastapi-app
   labels:
@@ -69,3 +69,14 @@ spec:
             items:
               - key: ca.crt
                 path: ca.crt
+  strategy:
+    canary:
+      maxSurge: 1
+      maxUnavailable: 0
+      steps:
+        - setWeight: 50
+        - pause:
+            duration: 15s
+        - setWeight: 100
+        - pause:
+            duration: 10s

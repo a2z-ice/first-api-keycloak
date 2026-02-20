@@ -90,12 +90,12 @@ pipeline {
                 script {
                     // Wait for ArgoCD to create the namespace (up to 60s)
                     sh """
-                        for i in \$(seq 1 12); do
+                        for i in \$(seq 1 24); do
                             if kubectl get namespace ${PR_NS} 2>/dev/null; then
                                 echo "Namespace ${PR_NS} exists."
                                 break
                             fi
-                            echo "Waiting for namespace ${PR_NS} (attempt \$i/12)..."
+                            echo "Waiting for namespace ${PR_NS} (attempt \$i/24)..."
                             sleep 5
                         done
                     """
@@ -113,7 +113,7 @@ pipeline {
                 withCredentials([string(credentialsId: 'ARGOCD_PASSWORD', variable: 'ARGOCD_PASS')]) {
                     sh """
                         argocd login ${ARGOCD_SERVER} --username admin --password \${ARGOCD_PASS} --insecure
-                        argocd app wait ${ARGOCD_APP} --health --sync --timeout 180
+                        argocd app wait ${ARGOCD_APP} --health --sync --timeout 300
                     """
                 }
             }
@@ -164,8 +164,64 @@ pipeline {
         stage('Seed Database') {
             steps {
                 sh """
-                    POD=\$(kubectl get pod -n ${PR_NS} -l app=fastapi-app -o jsonpath='{.items[0].metadata.name}')
-                    kubectl exec -n ${PR_NS} \${POD} -- python /app/scripts/create-test-data.py
+                    # Get admin token
+                    TOKEN=\$(curl -sf --insecure \\
+                        -d 'client_id=admin-cli' -d 'username=admin' \\
+                        -d 'password=admin' -d 'grant_type=password' \\
+                        '${KEYCLOAK_URL}/realms/master/protocol/openid-connect/token' \\
+                        | python3 -c "import sys,json; print(json.load(sys.stdin)['access_token'])")
+
+                    # Get Keycloak user ID for student-user (needed for Student record FK)
+                    KC_ID=\$(curl -sf --insecure \\
+                        -H "Authorization: Bearer \${TOKEN}" \\
+                        '${KEYCLOAK_URL}/admin/realms/${KEYCLOAK_REALM}/users?username=student-user&exact=true' \\
+                        | python3 -c "import sys,json; print(json.load(sys.stdin)[0]['id'])")
+
+                    POD=\$(kubectl get pod -n ${PR_NS} -l app=fastapi-app \\
+                        -o jsonpath='{.items[0].metadata.name}')
+
+                    SEED_PY=\$(cat <<PYEOF
+from app.database import SessionLocal
+from app.models import Student, Department
+db = SessionLocal()
+required_depts = [
+    ('Computer Science', 'CS department'),
+    ('Mathematics', 'Math department'),
+    ('Physics', 'Physics department'),
+]
+for dept_name, dept_desc in required_depts:
+    if not db.query(Department).filter(Department.name == dept_name).first():
+        db.add(Department(name=dept_name, description=dept_desc))
+        print('Created department:', dept_name)
+db.commit()
+cs = db.query(Department).filter(Department.name == 'Computer Science').first()
+kc_id = '\${KC_ID}'
+su = db.query(Student).filter(Student.keycloak_user_id == kc_id).first()
+if not su:
+    db.add(Student(name='Student User', email='student-user@example.com',
+                   keycloak_user_id=kc_id, department_id=cs.id if cs else None))
+    print('Created: Student User')
+elif su.name != 'Student User':
+    su.name = 'Student User'
+    su.email = 'student-user@example.com'
+    print('Restored name: Student User')
+else:
+    print('Exists: Student User')
+os_rec = db.query(Student).filter(Student.email == 'other-student@example.com').first()
+if not os_rec:
+    db.add(Student(name='Other Student', email='other-student@example.com',
+                   department_id=cs.id if cs else None))
+    print('Created: Other Student')
+elif os_rec.name != 'Other Student':
+    os_rec.name = 'Other Student'
+    print('Restored name: Other Student')
+else:
+    print('Exists: Other Student')
+db.commit()
+db.close()
+PYEOF
+)
+                    echo "\${SEED_PY}" | kubectl exec -n ${PR_NS} -i "\${POD}" -- python
                 """
             }
         }

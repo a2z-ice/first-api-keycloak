@@ -24,6 +24,10 @@ cd frontend && npm run dev
 # Run Playwright E2E tests against deployed app
 cd frontend && APP_URL=http://localhost:30000 npx playwright test
 
+# Run a single test file or by name pattern
+cd frontend && npx playwright test tests/e2e/auth.spec.ts
+cd frontend && npx playwright test --grep "admin can"
+
 # Run tests with HTML report
 cd frontend && npx playwright test --reporter=html
 
@@ -43,6 +47,9 @@ cd frontend && npx playwright test --reporter=html
 ./scripts/run-tests.sh --deployed
 ./scripts/run-tests.sh --local --start-app
 
+# Full clean slate: tear down cluster, rebuild everything, run E2E (lightweight)
+./scripts/clean-and-redeploy.sh
+
 # Verify Keycloak deployment
 ./scripts/verify-deployment.sh
 
@@ -60,7 +67,7 @@ cd frontend && npx playwright test --reporter=html
 
 # Setup individual components
 ./scripts/setup-registry.sh          # Start local Docker registry on localhost:5001
-./scripts/setup-argocd.sh            # Install ArgoCD v3.0.5 + Nginx Ingress + CoreDNS patch
+./scripts/setup-argocd.sh            # Install ArgoCD v3.3.1 + Argo Rollouts v1.8.4 + Nginx Ingress + CoreDNS patch
 ./scripts/setup-jenkins.sh           # Generate kubeconfig + start Jenkins via docker compose
 ./scripts/setup-keycloak-envs.sh     # Create dev + prod Keycloak clients
 
@@ -163,7 +170,7 @@ Keycloak (NodePort 31111)
 
 ### Tests (`frontend/tests/e2e/`)
 
-46+ E2E tests using **Playwright**. `playwright.config.ts` uses `APP_URL` env var (default: `http://localhost:30000`). HTML reporter generates `frontend/playwright-report/index.html`.
+54 E2E tests using **Playwright**. `playwright.config.ts` uses `APP_URL` env var (default: `http://localhost:30000`). HTML reporter generates `frontend/playwright-report/index.html`.
 
 Test files: `auth.spec.ts`, `students.spec.ts`, `departments.spec.ts`, `navigation.spec.ts`, `validation.spec.ts`, `errors.spec.ts`, `dark-mode.spec.ts`.
 
@@ -260,6 +267,17 @@ Test users: `admin-user`/`admin123` (admin), `student-user`/`student123` (studen
 ### CoreDNS Override
 
 `setup-argocd.sh` patches CoreDNS so all pods resolve `idp.keycloak.com` to the Kind node IP — this removes the need for `hostAliases` in any deployment manifest.
+
+### Argo Rollouts (v1.8.4)
+
+- Controller runs in `argo-rollouts` namespace; installed by `setup-argocd.sh`
+- `fastapi-app` and `frontend-app` use canary `Rollout` strategy (replica-based, no service mesh required)
+- FastAPI canary steps: setWeight 50% → pause 15s → setWeight 100% → pause 10s
+- Frontend canary steps: setWeight 50% → pause 10s
+- `argocd app wait --health` tracks Rollout completion automatically (ArgoCD 3.x native health checks)
+- `kubectl argo rollouts` plugin is NOT required for the pipeline
+- To watch a canary in progress: `kubectl get rollout fastapi-app -n student-app-dev -w`
+- `check_and_fix_coredns()` in `cicd-pipeline-test.sh` uses `kubectl patch rollout ... spec.restartAt` (no plugin needed) instead of `kubectl rollout restart deployment`
 
 ### Jenkins Credentials Required
 

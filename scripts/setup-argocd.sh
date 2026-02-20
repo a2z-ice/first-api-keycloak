@@ -1,20 +1,24 @@
 #!/usr/bin/env bash
-# setup-argocd.sh — Install ArgoCD v3.0.x, configure NodePort, install Nginx Ingress,
+# setup-argocd.sh — Install/upgrade ArgoCD v3.3.1 + Argo Rollouts v1.8.4,
+#                   configure NodePort, install Nginx Ingress,
 #                   apply ApplicationSets, and configure CoreDNS for idp.keycloak.com
 set -euo pipefail
 
 PROJECT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
-ARGOCD_VERSION="v3.0.5"
+ARGOCD_VERSION="v3.3.1"
+ROLLOUTS_VERSION="v1.8.4"
 ARGOCD_NAMESPACE="argocd"
 ARGOCD_NODEPORT="30080"
 
-echo "==> Setting up ArgoCD (${ARGOCD_VERSION})..."
+echo "==> Setting up ArgoCD (${ARGOCD_VERSION}) + Argo Rollouts (${ROLLOUTS_VERSION})..."
 
 # ---- Install ArgoCD ----
 echo "    Installing ArgoCD namespace and manifests..."
 kubectl create namespace "${ARGOCD_NAMESPACE}" --dry-run=client -o yaml | kubectl apply -f -
-kubectl apply -n "${ARGOCD_NAMESPACE}" -f \
-    "https://raw.githubusercontent.com/argoproj/argo-cd/${ARGOCD_VERSION}/manifests/install.yaml"
+kubectl apply -n "${ARGOCD_NAMESPACE}" \
+    --server-side \
+    --force-conflicts \
+    -f "https://raw.githubusercontent.com/argoproj/argo-cd/${ARGOCD_VERSION}/manifests/install.yaml"
 
 echo "    Waiting for ArgoCD deployments to be ready..."
 kubectl wait --namespace "${ARGOCD_NAMESPACE}" \
@@ -26,6 +30,20 @@ kubectl wait --namespace "${ARGOCD_NAMESPACE}" \
 echo "    Patching argocd-server service to NodePort ${ARGOCD_NODEPORT}..."
 kubectl patch svc argocd-server -n "${ARGOCD_NAMESPACE}" \
     -p "{\"spec\":{\"type\":\"NodePort\",\"ports\":[{\"port\":80,\"targetPort\":8080,\"nodePort\":${ARGOCD_NODEPORT},\"name\":\"http\"},{\"port\":443,\"targetPort\":8080,\"nodePort\":30081,\"name\":\"https\"}]}}"
+
+# ---- Install Argo Rollouts ----
+echo ""
+echo "==> Installing Argo Rollouts (${ROLLOUTS_VERSION})..."
+kubectl create namespace argo-rollouts --dry-run=client -o yaml | kubectl apply -f -
+kubectl apply -n argo-rollouts \
+    -f "https://github.com/argoproj/argo-rollouts/releases/download/${ROLLOUTS_VERSION}/install.yaml"
+
+echo "    Waiting for Argo Rollouts controller to be ready..."
+kubectl wait --namespace argo-rollouts \
+    --for=condition=ready pod \
+    --selector=app.kubernetes.io/name=argo-rollouts \
+    --timeout=120s
+echo "    Argo Rollouts ${ROLLOUTS_VERSION} installed."
 
 # ---- Install Nginx Ingress Controller ----
 echo "    Installing Nginx Ingress Controller..."

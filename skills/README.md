@@ -57,7 +57,8 @@ This document catalogs all technologies, tools, patterns, and skills used in the
 
 | Technology | Version | Purpose |
 |-----------|---------|---------|
-| ArgoCD | 3.0.5 | GitOps controller — syncs K8s state from git |
+| ArgoCD | 3.3.1 | GitOps controller — syncs K8s state from git |
+| Argo Rollouts | 1.8.4 | Progressive delivery — canary deployments via Rollout CRDs |
 | ArgoCD ApplicationSet | — | Multi-app templating (List + PullRequest generators) |
 | Kustomize | built-in | Overlay-based K8s manifest composition |
 | Nginx Ingress Controller | — | Routes `*.student.local:8080` to correct namespaces |
@@ -66,12 +67,13 @@ This document catalogs all technologies, tools, patterns, and skills used in the
 | GitHub REST API | v3 | PR label management, SHA resolution |
 | gh CLI | — | PR/issue management |
 
-**Pipeline test script**: `scripts/cicd-pipeline-test.sh` — fully automated end-to-end test of all three pipeline phases. Verified working: 45/45 E2E tests pass in dev, PR preview, and prod. Key patterns inside:
+**Pipeline test script**: `scripts/cicd-pipeline-test.sh` — fully automated end-to-end test of all three pipeline phases. Verified working: 54/54 E2E tests pass in dev, PR preview, and prod. Key patterns inside:
 - GITHUB_TOKEN retrieved from k8s secret (`argocd/github-token`) if not in environment
 - ArgoCD login via `setup_argocd_login()` — connects directly to NodePort `localhost:30080`, no port-forward; prints Docker proxy commands if port is unreachable
 - ArgoCD app detection via `kubectl get application` (not `argocd app list`, which is unreliable in non-TTY)
 - Seed script restores mutated student names before each E2E run
 - No sudo calls — `/etc/hosts` management is printed as instructions for the user
+- `check_and_fix_coredns()` uses `kubectl patch rollout ... spec.restartAt` for Argo Rollouts resources (no plugin needed); falls back to `kubectl rollout restart deployment` for backward compat
 
 ### DevOps / Scripting
 
@@ -169,6 +171,40 @@ hosts {
 }
 ```
 
+### Argo Rollouts — Canary Strategy (Replica-Based)
+
+`fastapi-app` and `frontend-app` are `argoproj.io/v1alpha1 Rollout` resources. No service mesh needed — Argo Rollouts uses replica counts to split traffic proportionally.
+
+```yaml
+strategy:
+  canary:
+    maxSurge: 1
+    maxUnavailable: 0
+    steps:
+      - setWeight: 50     # 1 of 2 pods is canary (50% traffic)
+      - pause: {duration: 15s}
+      - setWeight: 100    # promote all pods
+      - pause: {duration: 10s}
+```
+
+Key operational commands (no plugin required):
+```bash
+# Watch canary progression live
+kubectl get rollout fastapi-app -n student-app-dev -w
+
+# Restart a Rollout (triggers pod template annotation bump, initiates canary)
+kubectl patch rollout fastapi-app -n student-app-dev \
+  -p '{"spec":{"restartAt":"'"$(date -u +%Y-%m-%dT%H:%M:%SZ)"'"}}' --type=merge
+
+# Verify ArgoCD sees Rollout as Healthy
+argocd app get student-app-dev
+
+# Check Rollout history (revisions)
+kubectl rollout history rollout/fastapi-app -n student-app-dev
+```
+
+ArgoCD 3.x has native Rollout health checks — `argocd app wait --health` automatically waits for the canary to complete before returning.
+
 ### Three-Tier Deployment Flow
 
 ```
@@ -187,7 +223,18 @@ dev branch → Jenkins builds dev-{sha} images
 main branch → Jenkins reads dev image tag (no rebuild)
             → Updates prod overlay kustomization.yaml
             → ArgoCD syncs student-app-prod
+            → Argo Rollouts canary completes
             → E2E tests pass
+```
+
+**Pre-test cleanup** (required when migrating from Deployment → Rollout on a live cluster):
+```bash
+kubectl delete deployment fastapi-app frontend-app -n student-app-dev 2>/dev/null || true
+kubectl delete deployment fastapi-app frontend-app -n student-app-prod 2>/dev/null || true
+kubectl delete replicasets -n student-app-dev -l app=fastapi-app 2>/dev/null || true
+kubectl delete replicasets -n student-app-dev -l app=frontend-app 2>/dev/null || true
+kubectl delete replicasets -n student-app-prod -l app=fastapi-app 2>/dev/null || true
+kubectl delete replicasets -n student-app-prod -l app=frontend-app 2>/dev/null || true
 ```
 
 ---
@@ -251,11 +298,19 @@ Custom `RedisSessionMiddleware`:
 - Headless service for peer discovery (jdbc-ping)
 - Management port 9000 for health probes (separate from HTTPS 8443)
 
-### Deployment (FastAPI, Frontend, Redis, PostgreSQL)
+### Rollout (FastAPI, Frontend) — Argo Rollouts CRDs
 
-- 3 replicas for FastAPI and Frontend
+- `fastapi-app` and `frontend-app` use `argoproj.io/v1alpha1 Rollout` (not `apps/v1 Deployment`)
+- Canary strategy — replica-based traffic splitting (no service mesh required)
+- FastAPI steps: setWeight 50% → pause 15s → setWeight 100% → pause 10s
+- Frontend steps: setWeight 50% → pause 10s
+- ArgoCD 3.x tracks Rollout health natively; `argocd app wait --health` waits for canary completion
+- To watch canary progress: `kubectl get rollout fastapi-app -n student-app-dev -w`
+- To restart without plugin: `kubectl patch rollout <name> -n <ns> -p '{"spec":{"restartAt":"<ISO8601>"}}' --type=merge`
+
+### Deployment (Redis, PostgreSQL)
+
 - Single replica for Redis and PostgreSQL (stateful data)
-- `hostAliases` with `__NODE_IP__` placeholder substituted at deploy time
 
 ### Service Types
 

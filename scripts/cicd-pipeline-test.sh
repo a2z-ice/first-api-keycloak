@@ -359,13 +359,19 @@ check_and_fix_coredns() {
   kubectl rollout status deployment coredns -n kube-system --timeout=60s 2>/dev/null || true
 
   for ns in student-app-dev student-app-prod; do
-    if kubectl get deployment fastapi-app -n "$ns" &>/dev/null; then
-      log_info "Restarting fastapi-app in $ns"
+    if kubectl get rollout fastapi-app -n "$ns" &>/dev/null; then
+      log_info "Restarting fastapi-app Rollout in $ns"
+      kubectl patch rollout fastapi-app -n "$ns" \
+        -p "{\"spec\":{\"restartAt\":\"$(date -u +%Y-%m-%dT%H:%M:%SZ)\"}}" \
+        --type=merge
+    elif kubectl get deployment fastapi-app -n "$ns" &>/dev/null; then
+      log_info "Restarting fastapi-app Deployment in $ns"
       kubectl rollout restart deployment fastapi-app -n "$ns"
     fi
   done
-  if kubectl get deployment fastapi-app -n student-app-dev &>/dev/null; then
-    kubectl rollout status deployment fastapi-app -n student-app-dev --timeout=120s 2>/dev/null || true
+  # Wait for pods to be Running (works for both Rollout and Deployment)
+  if kubectl get pods -n student-app-dev -l app=fastapi-app &>/dev/null; then
+    wait_for_pods "student-app-dev" "app=fastapi-app" 120
   fi
 
   log_success "CoreDNS patched ($CURRENT_IP → $NODE_IP) and pods restarted"
@@ -727,7 +733,7 @@ phase2_pr_preview() {
   wait_for_pods "$NS" "app=fastapi-app" 240
 
   # Wait for ArgoCD sync
-  argocd app wait "$APP_NAME" --health --sync --timeout 180
+  argocd app wait "$APP_NAME" --health --sync --timeout 300
   log_success "$APP_NAME: Synced + Healthy"
 
   # Register Keycloak client for this PR
