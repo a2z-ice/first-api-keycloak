@@ -29,7 +29,7 @@ test.describe('Authentication', () => {
   test('user can log out', async ({ page }) => {
     await login(page, 'admin');
     await page.click('text=Logout');
-    // After logout, Keycloak redirects back to login page
+    // After logout, backend clears session and app navigates to /login directly
     await page.waitForURL(/\/login/, { timeout: 15000 });
     // Verify session is cleared
     await page.goto('/');

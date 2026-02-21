@@ -10,9 +10,9 @@ export default function Navbar() {
 
   const handleLogout = async () => {
     try {
-      const { logout_url } = await logout();
+      const { redirect } = await logout();
       await refresh();
-      window.location.href = logout_url;
+      navigate(redirect);
     } catch {
       navigate('/login');
     }

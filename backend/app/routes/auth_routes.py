@@ -1,6 +1,7 @@
 import json
 import base64
 
+import httpx
 from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse, RedirectResponse
 
@@ -50,6 +51,7 @@ async def callback(request: Request):
 
     request.session["token"] = {
         "access_token": access_token,
+        "refresh_token": token.get("refresh_token", ""),
         "resource_access": access_claims.get("resource_access", {}),
     }
 
@@ -79,13 +81,24 @@ async def me(request: Request):
 
 @router.post("/logout")
 async def logout(request: Request):
-    """Clear session and return Keycloak logout URL."""
-    logout_url = (
-        f"{settings.keycloak_url}/realms/{settings.keycloak_realm}"
-        f"/protocol/openid-connect/logout"
-        f"?post_logout_redirect_uri={settings.frontend_url}/login"
-        f"&client_id={settings.keycloak_client_id}"
-    )
+    """Backchannel logout: silently terminate Keycloak session, clear local session."""
+    token_data = request.session.get("token", {})
+    refresh_token = token_data.get("refresh_token", "")
+
+    if refresh_token:
+        try:
+            async with httpx.AsyncClient(verify=False) as client:
+                await client.post(
+                    f"{settings.keycloak_url}/realms/{settings.keycloak_realm}"
+                    f"/protocol/openid-connect/logout",
+                    data={
+                        "client_id": settings.keycloak_client_id,
+                        "client_secret": settings.keycloak_client_secret,
+                        "refresh_token": refresh_token,
+                    },
+                )
+        except Exception:
+            pass  # Best-effort — clear session regardless
 
     request.session.clear()
-    return {"logout_url": logout_url}
+    return {"redirect": "/login"}
