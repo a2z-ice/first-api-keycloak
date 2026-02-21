@@ -17,6 +17,7 @@ const path = require('path');
 
 const SCREENSHOT_DIR = path.join(__dirname, '..', 'docs', 'screenshots');
 const ARGOCD_URL  = 'https://localhost:18080';  // port-forward (ArgoCD serves HTTPS on 8080)
+const JENKINS_URL = 'http://localhost:8090';
 const DEV_URL     = 'http://dev.student.local:8080';
 const PROD_URL    = 'http://prod.student.local:8080';
 const KC_URL      = 'https://idp.keycloak.com:31111';
@@ -328,6 +329,156 @@ async function loginToArgoCD(page) {
 </div>
 </body>
 </html>`;
+
+      await page.setContent(html);
+      await wait(500);
+      await shot(page, name);
+    }
+
+    await ctx.close();
+  }
+
+  console.log('\n=== Jenkins Screenshots ===');
+  {
+    const ctx = await browser.newContext({ ignoreHTTPSErrors: true, viewport: { width: 1400, height: 900 } });
+    const page = await ctx.newPage();
+
+    // 20 — Jenkins dashboard (job list)
+    await page.goto(`${JENKINS_URL}/`);
+    await wait(2000);
+    await shot(page, '20-jenkins-dashboard');
+
+    // 21 — student-app-dev job page
+    await page.goto(`${JENKINS_URL}/job/student-app-dev/`);
+    await wait(2000);
+    await shot(page, '21-jenkins-dev-job');
+
+    // 22 — student-app-pr-preview job page
+    await page.goto(`${JENKINS_URL}/job/student-app-pr-preview/`);
+    await wait(2000);
+    await shot(page, '22-jenkins-pr-preview-job');
+
+    // 23 — student-app-prod job page
+    await page.goto(`${JENKINS_URL}/job/student-app-prod/`);
+    await wait(2000);
+    await shot(page, '23-jenkins-prod-job');
+
+    // 24 — Jenkins credentials page
+    await page.goto(`${JENKINS_URL}/manage/credentials/store/system/domain/_/`);
+    await wait(2000);
+    await shot(page, '24-jenkins-credentials');
+
+    await ctx.close();
+  }
+
+  console.log('\n=== Jenkins Pipeline Stage Diagrams ===');
+  {
+    const ctx = await browser.newContext({ ignoreHTTPSErrors: true, viewport: { width: 1300, height: 620 } });
+    const page = await ctx.newPage();
+
+    // Render pipeline stages as styled HTML cards
+    const pipelines = [
+      {
+        name: '25-jenkins-pipeline-dev-stages',
+        title: 'Jenkins Pipeline: student-app-dev (Jenkinsfile.dev)',
+        trigger: 'Manual / GitHub webhook on cicd branch push',
+        stages: [
+          { label: 'Checkout',      icon: '📥', desc: 'Clone cicd branch from GitHub',                         color: '#3fb950' },
+          { label: 'Build Images',  icon: '🐳', desc: 'docker build fastapi + frontend images',                color: '#3fb950' },
+          { label: 'Push Images',   icon: '📤', desc: 'Push dev-<sha8> tags to localhost:5001 registry',       color: '#3fb950' },
+          { label: 'Update Overlay',icon: '📝', desc: 'Update gitops/overlays/dev/kustomization.yaml → commit + push to dev branch', color: '#3fb950' },
+          { label: 'ArgoCD Sync',   icon: '🔄', desc: 'Wait for ArgoCD to sync student-app-dev (canary rollout completes)', color: '#3fb950' },
+          { label: 'Seed DB',       icon: '🌱', desc: 'kubectl exec inline Python to seed departments + students', color: '#3fb950' },
+          { label: 'E2E Tests',     icon: '🧪', desc: 'Run 45 Playwright tests against dev.student.local:8080',color: '#3fb950' },
+          { label: 'Open PR',       icon: '🔀', desc: 'gh pr create: cicd → main (triggers prod pipeline)',    color: '#3fb950' },
+        ],
+      },
+      {
+        name: '26-jenkins-pipeline-preview-stages',
+        title: 'Jenkins Pipeline: student-app-pr-preview (Jenkinsfile.pr-preview)',
+        trigger: 'GitHub webhook on PR opened (label: preview)',
+        stages: [
+          { label: 'Checkout',       icon: '📥', desc: 'Clone PR branch from GitHub',                               color: '#58a6ff' },
+          { label: 'Build Images',   icon: '🐳', desc: 'docker build both images with PR SHA tag',                  color: '#58a6ff' },
+          { label: 'Push Images',    icon: '📤', desc: 'Push pr-<N>-<sha8> tags to registry',                       color: '#58a6ff' },
+          { label: 'Label PR',       icon: '🏷️', desc: 'POST /repos/{owner}/{repo}/issues/{N}/labels → "preview"', color: '#58a6ff' },
+          { label: 'Wait Namespace', icon: '⏳', desc: 'Wait for ArgoCD to create student-app-pr-N namespace',      color: '#58a6ff' },
+          { label: 'ArgoCD Sync',    icon: '🔄', desc: 'Wait for ArgoCD to sync PR preview app (canary)',           color: '#58a6ff' },
+          { label: 'Copy TLS Secret',icon: '🔒', desc: 'kubectl copy keycloak-tls secret to PR namespace',         color: '#58a6ff' },
+          { label: 'Seed DB',        icon: '🌱', desc: 'kubectl exec inline Python seeder in PR pod',               color: '#58a6ff' },
+          { label: 'E2E Tests',      icon: '🧪', desc: 'Run 45 tests against pr-N.student.local:8080',             color: '#58a6ff' },
+          { label: 'Merge PR',       icon: '✅', desc: 'gh pr merge → main (triggers prod pipeline)',               color: '#58a6ff' },
+        ],
+      },
+      {
+        name: '27-jenkins-pipeline-prod-stages',
+        title: 'Jenkins Pipeline: student-app-prod (Jenkinsfile.prod)',
+        trigger: 'GitHub webhook on push to main branch',
+        stages: [
+          { label: 'Checkout',       icon: '📥', desc: 'Clone main branch from GitHub',                             color: '#f78166' },
+          { label: 'Reuse Dev Tag',  icon: '🏷️', desc: 'Read IMAGE_TAG from dev overlay — no rebuild',            color: '#f78166' },
+          { label: 'Update Overlay', icon: '📝', desc: 'Update gitops/overlays/prod/kustomization.yaml → push main',color: '#f78166' },
+          { label: 'ArgoCD Sync',    icon: '🔄', desc: 'Wait for ArgoCD to sync student-app-prod (canary rollout)',  color: '#f78166' },
+          { label: 'Seed DB',        icon: '🌱', desc: 'kubectl exec inline Python seeder in prod pod',             color: '#f78166' },
+          { label: 'E2E Tests',      icon: '🧪', desc: 'Run 45 Playwright tests against prod.student.local:8080',  color: '#f78166' },
+        ],
+      },
+    ];
+
+    for (const { name, title, trigger, stages } of pipelines) {
+      const stageCards = stages.map((s, i) => `
+        <div class="stage">
+          <div class="stage-num">${i + 1}</div>
+          <div class="stage-icon">${s.icon}</div>
+          <div class="stage-label" style="color:${s.color}">${s.label}</div>
+          <div class="stage-desc">${s.desc}</div>
+        </div>
+        ${i < stages.length - 1 ? '<div class="arrow">→</div>' : ''}
+      `).join('');
+
+      const html = `<!DOCTYPE html>
+<html>
+<head><meta charset="utf-8">
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { background: #0d1117; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; padding: 20px; }
+  .card {
+    background: #161b22;
+    border: 1px solid #30363d;
+    border-radius: 12px;
+    padding: 20px 24px;
+  }
+  .header { margin-bottom: 10px; }
+  .title { color: #e6edf3; font-size: 15px; font-weight: 600; margin-bottom: 6px; }
+  .trigger { color: #8b949e; font-size: 12px; }
+  .trigger span { color: #f0883e; }
+  .pipeline { display: flex; align-items: center; flex-wrap: wrap; gap: 4px; margin-top: 16px; }
+  .stage {
+    background: #0d1117;
+    border: 1px solid #30363d;
+    border-radius: 8px;
+    padding: 10px 12px;
+    min-width: 120px;
+    max-width: 140px;
+    text-align: center;
+  }
+  .stage-num { color: #484f58; font-size: 10px; margin-bottom: 2px; }
+  .stage-icon { font-size: 18px; margin-bottom: 4px; }
+  .stage-label { font-size: 12px; font-weight: 600; margin-bottom: 4px; }
+  .stage-desc { color: #8b949e; font-size: 9px; line-height: 1.3; }
+  .arrow { color: #30363d; font-size: 20px; flex-shrink: 0; }
+  .jenkins-logo { color: #d33833; font-weight: 700; font-size: 13px; letter-spacing: 0.5px; }
+</style>
+</head>
+<body>
+<div class="card">
+  <div class="header">
+    <div class="title">⚙️ ${title}</div>
+    <div class="trigger">Trigger: <span>${trigger}</span></div>
+  </div>
+  <div class="pipeline">${stageCards}</div>
+</div>
+</body></html>`;
 
       await page.setContent(html);
       await wait(500);

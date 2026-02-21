@@ -50,7 +50,7 @@ RUN curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg \
     && rm -rf /var/lib/apt/lists/*
 
 # ---- Allow jenkins user to run docker and kubectl ----
-RUN usermod -aG docker jenkins \
+RUN groupadd -f docker && usermod -aG docker jenkins \
     && echo "jenkins ALL=(ALL) NOPASSWD: /usr/sbin/tee -a /etc/hosts" >> /etc/sudoers
 
 USER jenkins

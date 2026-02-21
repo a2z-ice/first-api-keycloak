@@ -56,7 +56,149 @@ Developer → Git Push → GitHub
 
 ---
 
-## 2. ArgoCD — Application Status
+## 2. Jenkins — CI Automation (The Build Engine)
+
+Jenkins is the **Continuous Integration** layer. It is responsible for everything that happens *before* Kubernetes: compiling code, building Docker images, pushing them to the registry, and updating the GitOps overlay. ArgoCD then picks up those changes automatically.
+
+Jenkins is **NOT** responsible for deploying directly to Kubernetes — that is ArgoCD's job. Jenkins only pushes to Git.
+
+```
+Developer
+    ↓  git push
+GitHub
+    ↓  webhook
+Jenkins                ← THIS IS JENKINS' ROLE
+    ↓  docker build + push
+    ↓  git push (overlay image tag)
+GitHub (gitops/overlays/dev/)
+    ↓  ArgoCD watches
+Kubernetes (canary rollout via Argo Rollouts)
+```
+
+### Three Pipeline Jobs
+
+| Job | Jenkinsfile | Triggered By | Purpose |
+|-----|-------------|-------------|---------|
+| `student-app-dev` | `Jenkinsfile.dev` | Manual / push to `cicd` | Build + deploy to dev + E2E test |
+| `student-app-pr-preview` | `Jenkinsfile.pr-preview` | PR opened with `preview` label | Ephemeral test environment per PR |
+| `student-app-prod` | `Jenkinsfile.prod` | Push to `main` (PR merge) | Promote dev image to production |
+
+### 2.1 Jenkins Dashboard — Three Pipeline Jobs
+
+![Jenkins Dashboard](docs/screenshots/20-jenkins-dashboard.png)
+
+**What this shows:**
+- Jenkins 2.541.2 running at `http://localhost:8090`
+- Three pipeline jobs: `student-app-dev`, `student-app-pr-preview`, `student-app-prod`
+- `student-app-dev` has build #1 (failed due to Groovy backtick syntax — fixed in the actual cicd branch run via `cicd-pipeline-test.sh`)
+- `student-app-pr-preview` and `student-app-prod` await their triggers (webhook or manual)
+
+---
+
+### 2.2 Dev Pipeline Job
+
+![Jenkins Dev Job](docs/screenshots/21-jenkins-dev-job.png)
+
+**What this shows:**
+- `student-app-dev` job configured with `Jenkinsfile.dev` from the `cicd` branch
+- Pipeline source: `https://github.com/a2z-ice/first-api-keycloak.git`
+- The job runs the full dev pipeline: build → push → deploy → E2E tests → open PR
+
+---
+
+### 2.3 PR Preview Pipeline Job
+
+![Jenkins PR Preview Job](docs/screenshots/22-jenkins-pr-preview-job.png)
+
+**What this shows:**
+- `student-app-pr-preview` job — triggered when a GitHub PR gets the `preview` label
+- Creates a fully isolated Kubernetes namespace `student-app-pr-{N}` with its own DB, Redis, and app instances
+- Runs 45 E2E tests against the PR's specific code before it reaches main
+- When tests pass, it **merges the PR** automatically
+
+---
+
+### 2.4 Prod Pipeline Job
+
+![Jenkins Prod Job](docs/screenshots/23-jenkins-prod-job.png)
+
+**What this shows:**
+- `student-app-prod` job — triggered automatically when main branch changes (PR merge)
+- **Does NOT rebuild Docker images** — reuses the same image tag that passed dev E2E tests
+- Updates `gitops/overlays/prod/kustomization.yaml` → pushes to `main` → ArgoCD auto-syncs production
+
+---
+
+### 2.5 Jenkins Credentials (Stored Secrets)
+
+![Jenkins Credentials](docs/screenshots/24-jenkins-credentials.png)
+
+**What this shows:**
+- `ARGOCD_PASSWORD` — ArgoCD admin password used to authenticate CLI commands (`argocd app wait`)
+- `GITHUB_TOKEN` — GitHub PAT used for `gh pr create`, `gh pr merge`, and labeling PRs
+- Credentials stored securely in Jenkins, never hardcoded in Jenkinsfiles
+- Jenkins injects them at build time via `credentials()` binding
+
+---
+
+### 2.6 Dev Pipeline Stages (All 8 Stages)
+
+![Dev Pipeline Stages](docs/screenshots/25-jenkins-pipeline-dev-stages.png)
+
+**Stage-by-stage explanation:**
+
+| # | Stage | What Jenkins does |
+|---|-------|------------------|
+| 1 | **Checkout** | `git clone` the `cicd` branch |
+| 2 | **Build Images** | `docker build` FastAPI and React/Nginx images |
+| 3 | **Push Images** | Push `dev-<sha8>` tagged images to `localhost:5001` registry |
+| 4 | **Update Overlay** | Edit `gitops/overlays/dev/kustomization.yaml` with new tag → commit → push to `dev` branch |
+| 5 | **ArgoCD Sync** | `argocd app wait student-app-dev --health --timeout 300` — waits for canary to complete |
+| 6 | **Seed DB** | `kubectl exec` inline Python to create departments + student records |
+| 7 | **E2E Tests** | `npx playwright test` — 45 tests against `dev.student.local:8080` |
+| 8 | **Open PR** | `gh pr create cicd → main` — triggers PR preview pipeline |
+
+---
+
+### 2.7 PR Preview Pipeline Stages (All 10 Stages)
+
+![PR Preview Pipeline Stages](docs/screenshots/26-jenkins-pipeline-preview-stages.png)
+
+**This pipeline is the most complex — it creates a full isolated environment:**
+
+| # | Stage | What Jenkins does |
+|---|-------|------------------|
+| 1 | **Checkout** | Clone the PR branch |
+| 2 | **Build Images** | Build both images with `pr-{N}-<sha8>` tags |
+| 3 | **Push Images** | Push to registry |
+| 4 | **Label PR** | `POST /repos/.../issues/{N}/labels` → adds `preview` label → ArgoCD ApplicationSet detects it |
+| 5 | **Wait Namespace** | Polls until `student-app-pr-{N}` namespace exists (ArgoCD created it) |
+| 6 | **ArgoCD Sync** | Wait for PR app to be Healthy (canary rollout) |
+| 7 | **Copy TLS Secret** | `kubectl` copies `keycloak-tls` secret into PR namespace |
+| 8 | **Seed DB** | Seeds test data into the PR-specific database |
+| 9 | **E2E Tests** | 45 tests against `pr-{N}.student.local:8080` |
+| 10 | **Merge PR** | `gh pr merge` → pushes to `main` → triggers production pipeline |
+
+---
+
+### 2.8 Production Pipeline Stages (All 6 Stages)
+
+![Prod Pipeline Stages](docs/screenshots/27-jenkins-pipeline-prod-stages.png)
+
+**Production is the simplest pipeline — no rebuild:**
+
+| # | Stage | What Jenkins does |
+|---|-------|------------------|
+| 1 | **Checkout** | Clone `main` branch |
+| 2 | **Reuse Dev Tag** | Read `IMAGE_TAG` from `gitops/overlays/dev/kustomization.yaml` — same image as dev |
+| 3 | **Update Overlay** | Write same tag to `gitops/overlays/prod/kustomization.yaml` → push to `main` |
+| 4 | **ArgoCD Sync** | Wait for `student-app-prod` to be Healthy (canary rollout in production) |
+| 5 | **Seed DB** | Seed production database |
+| 6 | **E2E Tests** | 45 tests against `prod.student.local:8080` — confirms production is working |
+
+---
+
+## 3. ArgoCD — Application Status
 
 ArgoCD manages all environments from a single control plane. Both **development** and **production** environments are `Healthy` and `Synced`.
 
@@ -122,7 +264,7 @@ ArgoCD manages all environments from a single control plane. Both **development*
 
 ---
 
-## 3. Argo Rollouts — Canary Deployment Strategy
+## 4. Argo Rollouts — Canary Deployment Strategy
 
 Argo Rollouts replaces Kubernetes `Deployment` resources with `Rollout` resources that implement advanced deployment strategies. The canary strategy routes a portion of real traffic to the new version before full rollout.
 
@@ -204,7 +346,7 @@ Argo Rollouts replaces Kubernetes `Deployment` resources with `Rollout` resource
 
 ---
 
-## 4. Application — Development Environment
+## 5. Application — Development Environment
 
 The Student Management System is a full-stack web application secured with OAuth2.1 and Keycloak. Access is role-based: admins see everything, staff see students but cannot edit, students see only their own record.
 
@@ -274,7 +416,7 @@ The Student Management System is a full-stack web application secured with OAuth
 
 ---
 
-## 5. Application — Production Environment
+## 6. Application — Production Environment
 
 Production runs the same code promoted from dev after all E2E tests pass.
 
@@ -300,7 +442,7 @@ Production runs the same code promoted from dev after all E2E tests pass.
 
 ---
 
-## 6. End-to-End Test Results
+## 7. End-to-End Test Results
 
 All 45 automated Playwright tests pass in both environments after canary deployment.
 
@@ -329,7 +471,7 @@ Tests run against the live deployed application (not mocks) and verify the compl
 
 ---
 
-## 7. Deployment Pipeline Flow
+## 8. Deployment Pipeline Flow
 
 ```
 1. Developer pushes code to cicd branch
@@ -372,7 +514,7 @@ Tests run against the live deployed application (not mocks) and verify the compl
 
 ---
 
-## 8. Key Benefits
+## 9. Key Benefits
 
 ### For Operations
 - **No manual deployments** — every change goes through Git
@@ -392,7 +534,7 @@ Tests run against the live deployed application (not mocks) and verify the compl
 
 ---
 
-## 9. Infrastructure Summary
+## 10. Infrastructure Summary
 
 ```
 Kubernetes Cluster (Kind — local)
@@ -413,7 +555,7 @@ Kubernetes Cluster (Kind — local)
 
 ---
 
-## 10. Next Steps (Optional Enhancements)
+## 11. Next Steps (Optional Enhancements)
 
 | Enhancement | Description | Effort |
 |-------------|-------------|--------|
