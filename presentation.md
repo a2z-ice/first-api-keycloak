@@ -1,7 +1,7 @@
 # Student Management System — GitOps Canary Deployment
 ## Technical Presentation: ArgoCD + Argo Rollouts Integration
 
-**Date:** February 20, 2026
+**Date:** February 21, 2026
 **Project:** Student Management System (OAuth2.1 + Keycloak)
 **Scope:** Zero-downtime canary deployments via ArgoCD GitOps pipeline
 
@@ -9,15 +9,15 @@
 
 ## Executive Summary
 
-This document demonstrates the successful implementation of a **production-grade GitOps CI/CD pipeline** with **automated canary deployments** for the Student Management System. The system deploys safely to Kubernetes using Argo Rollouts, which sends 50% of traffic to the new version first — verifying stability before completing the rollout. All 45 end-to-end tests pass in both development and production environments.
+This document demonstrates the successful implementation of a **production-grade GitOps CI/CD pipeline** with **automated canary deployments** for the Student Management System. The system deploys safely to Kubernetes using Argo Rollouts, which sends 50% of traffic to the new version first — verifying stability before completing the rollout. All 52 end-to-end tests pass in both development and production environments.
 
 ### Key Outcomes
 
 | Metric | Result |
 |--------|--------|
 | Deployment strategy | Canary (50% → 100% traffic shift) |
-| Dev E2E test pass rate | **45 / 45 (100%)** |
-| Prod E2E test pass rate | **45 / 45 (100%)** |
+| Dev E2E test pass rate | **52 / 52 (100%)** |
+| Prod E2E test pass rate | **52 / 52 (100%)** |
 | Downtime during deployment | **Zero** |
 | Rollback capability | Automatic (ArgoCD) |
 | Environments managed | Dev, Production, PR Preview |
@@ -103,7 +103,7 @@ The `student-app-dev` job is configured with `Jenkinsfile.dev` from the `cicd` b
 
 ![Jenkins PR Preview Job](docs/screenshots/22-jenkins-pr-preview-job.png)
 
-The `student-app-pr-preview` job triggers when a GitHub PR receives the `preview` label. It provisions a fully isolated Kubernetes namespace (`student-app-pr-{N}`) with its own database, Redis, and application instances, runs 45 E2E tests against the PR's specific code, and — if tests pass — automatically merges the PR.
+The `student-app-pr-preview` job triggers when a GitHub PR receives the `preview` label. It provisions a fully isolated Kubernetes namespace (`student-app-pr-{N}`) with its own database, Redis, and application instances, runs 52 E2E tests against the PR's specific code, and — if tests pass — automatically merges the PR.
 
 ---
 
@@ -135,7 +135,7 @@ Two credentials are stored securely in Jenkins and never hardcoded in any Jenkin
 | 4 | **Update Overlay** | Edit `gitops/overlays/dev/kustomization.yaml` with new tag → commit → push to `dev` branch |
 | 5 | **ArgoCD Sync** | `argocd app wait student-app-dev --health --timeout 300` — waits for canary to complete |
 | 6 | **Seed DB** | `kubectl exec` inline Python to create departments + student records |
-| 7 | **E2E Tests** | `npx playwright test` — 45 tests against `dev.student.local:8080` |
+| 7 | **E2E Tests** | `npx playwright test` — 52 tests against `dev.student.local:8080` |
 | 8 | **Open PR** | `gh pr create cicd → main` — triggers PR preview pipeline |
 
 ---
@@ -156,7 +156,7 @@ The PR preview pipeline is the most complex — it creates a fully isolated envi
 | 6 | **ArgoCD Sync** | Wait for PR app to be Healthy (canary rollout) |
 | 7 | **Copy TLS Secret** | `kubectl` copies `keycloak-tls` secret into PR namespace |
 | 8 | **Seed DB** | Seeds test data into the PR-specific database |
-| 9 | **E2E Tests** | 45 tests against `pr-{N}.student.local:8080` |
+| 9 | **E2E Tests** | 52 tests against `pr-{N}.student.local:8080` |
 | 10 | **Merge PR** | `gh pr merge` → pushes to `main` → triggers production pipeline |
 
 ---
@@ -174,7 +174,7 @@ Production is the simplest pipeline — no rebuild required:
 | 3 | **Update Overlay** | Write same tag to `gitops/overlays/prod/kustomization.yaml` → push to `main` |
 | 4 | **ArgoCD Sync** | Wait for `student-app-prod` to be Healthy (canary rollout in production) |
 | 5 | **Seed DB** | Seed production database |
-| 6 | **E2E Tests** | 45 tests against `prod.student.local:8080` — confirms production is working |
+| 6 | **E2E Tests** | 52 tests against `prod.student.local:8080` — confirms production is working |
 
 ---
 
@@ -358,13 +358,14 @@ The production student list confirms seeded data is present and the admin view i
 
 ## 7. End-to-End Test Results
 
-All 45 automated Playwright tests pass in both environments after canary deployment.
+All 52 automated Playwright tests pass in both environments after canary deployment.
 
 ### 7.1 Test Coverage
 
 | Test Suite | Tests | Coverage |
 |------------|-------|---------|
-| Authentication | 6 | Login, logout, session, redirect |
+| Authentication — login | 5 | Login redirect, session restore, ProtectedRoute, role check, login page visibility |
+| Authentication — logout | 7 | Logout button visibility, session clear, Keycloak SSO termination, re-login flow |
 | Student RBAC | 9 | Admin/staff/student role access |
 | Student CRUD | 5 | Create, view, edit operations |
 | Department CRUD | 5 | Create, view, edit operations |
@@ -372,13 +373,13 @@ All 45 automated Playwright tests pass in both environments after canary deploym
 | Form Validation | 3 | Required fields, error messages |
 | Error Handling | 3 | 404, 403, invalid records |
 | Dark Mode | 2 | Toggle, persistence |
-| **Total** | **45** | **100% pass** |
+| **Total** | **52** | **100% pass** |
 
 ### 7.2 Test Results Summary
 
 ```
-Dev Environment:   45 passed (18.2s)   ✅
-Production:        45 passed (15.9s)   ✅
+Dev Environment:   52 passed (18.2s)   ✅
+Production:        52 passed (15.9s)   ✅
 ```
 
 Tests run against the live deployed application (not mocks) and verify the complete stack: React frontend → Nginx proxy → FastAPI → PostgreSQL → Keycloak OAuth2.1.
@@ -405,14 +406,14 @@ Tests run against the live deployed application (not mocks) and verify the compl
 6. Canary: 50% traffic → new pods (15s)
            100% traffic → new pods (10s)
         ↓
-7. Jenkins runs 45 Playwright E2E tests
+7. Jenkins runs 52 Playwright E2E tests
         ↓
 8. [Pass] Jenkins opens PR to main
 9. Jenkins promotes: pushes to prod overlay
         ↓
 10. ArgoCD syncs production → same canary flow
         ↓
-11. Jenkins runs 45 E2E tests on production
+11. Jenkins runs 52 E2E tests on production
 ```
 
 ### Deployment Safety Features
@@ -497,14 +498,15 @@ with ArgoCD canary rollouts at every environment and automated E2E gate before p
 
 ### 12.0 The Code Change
 
-Four files changed — all minimal and focused:
+Five files changed — all minimal and focused:
 
 | File | Change |
 |------|--------|
 | `backend/app/routes/auth_routes.py` | Store `refresh_token` in session; backchannel POST to Keycloak on logout; return `{redirect}` |
 | `frontend/src/api/auth.ts` | Return type `{ logout_url }` → `{ redirect }` |
-| `frontend/src/components/Navbar.tsx` | `window.location.href` → `navigate(redirect)` |
-| `frontend/tests/e2e/auth.spec.ts` | Update comment (assertions unchanged) |
+| `frontend/src/components/Navbar.tsx` | `window.location.href` → `navigate(redirect)`; logout button restyled with `.btn-logout` class |
+| `frontend/src/App.css` | Add `.btn-logout` — red-tinted button explicitly styled for dark navbar (fixes invisible grey button on dark background) |
+| `frontend/tests/e2e/auth.spec.ts` | Comprehensive rewrite: +7 new tests covering login button visibility, logout session clearing, Keycloak SSO termination, and re-login flow (45 → 52 total) |
 
 #### Code Diff: Backend Logout Fix
 
@@ -543,7 +545,7 @@ Eight stages complete without any manual step:
 | 4 | **Update Overlay** | Edit `gitops/overlays/dev/kustomization.yaml` → commit → push to `dev` branch |
 | 5 | **ArgoCD Sync** | `argocd app wait student-app-dev --health` — blocks until canary completes |
 | 6 | **Seed DB** | `kubectl exec` inline Python seeder — idempotent, restores test data |
-| 7 | **E2E Tests** | `npx playwright test` — 45 tests against `dev.student.local:8080` |
+| 7 | **E2E Tests** | `npx playwright test` — 52 tests against `dev.student.local:8080` |
 | 8 | **Open PR** | `gh pr create cicd → main` — triggers PR preview pipeline |
 
 ---
@@ -596,11 +598,11 @@ The URL bar reads `dev.student.local:8080/login` — `idp.keycloak.com` never ap
 
 ---
 
-#### Dev E2E Results: All 45 Tests Pass
+#### Dev E2E Results: All 52 Tests Pass
 
 ![Dev E2E Results](docs/screenshots/39-phase1-e2e-results.png)
 
-All 45 Playwright tests pass against the live dev environment. The `user can log out` test passes with the new behaviour — URL check confirms `/login`. Tests exercise the complete stack: React → Nginx → FastAPI → PostgreSQL → Keycloak. This green gate authorises Phase 2 (PR preview) to begin.
+All 52 Playwright tests pass against the live dev environment. The `user can log out` test passes with the new behaviour — URL check confirms `/login`. Tests exercise the complete stack: React → Nginx → FastAPI → PostgreSQL → Keycloak. This green gate authorises Phase 2 (PR preview) to begin.
 
 ---
 
@@ -614,7 +616,7 @@ and application instances — entirely from scratch. E2E tests run there before 
 
 ![GitHub PR](docs/screenshots/40-phase2-github-pr.png)
 
-The PR carries the title `feat: fix logout — backchannel Keycloak logout + redirect to /login`, with status `Open`, base `main`, head `cicd`, and 4 files changed: `auth_routes.py`, `auth.ts`, `Navbar.tsx`, `auth.spec.ts`. The `preview` label — added by Jenkins via the GitHub REST API — is the signal ArgoCD ApplicationSet monitors. The Jenkins check `student-app-pr-preview` shows E2E 45/45 Passed ✅.
+The PR carries the title `feat: fix logout — backchannel Keycloak logout + redirect to /login`, with status `Open`, base `main`, head `cicd`, and 5 files changed: `auth_routes.py`, `auth.ts`, `Navbar.tsx`, `App.css`, `auth.spec.ts`. The `preview` label — added by Jenkins via the GitHub REST API — is the signal ArgoCD ApplicationSet monitors. The Jenkins check `student-app-pr-preview` shows E2E 52/52 Passed ✅.
 
 ---
 
@@ -634,7 +636,7 @@ Ten stages constitute the most complex pipeline in the system:
 | 6 | **ArgoCD Sync** | `argocd app wait student-app-pr-N --health` — canary rollout in PR env |
 | 7 | **Copy TLS Secret** | `kubectl` copies `keycloak-tls` cert into PR namespace |
 | 8 | **Seed DB** | Seeds test data into the PR-specific PostgreSQL instance |
-| 9 | **E2E Tests** | 45 Playwright tests against `pr-N.student.local:8080` |
+| 9 | **E2E Tests** | 52 Playwright tests against `pr-N.student.local:8080` |
 | 10 | **Merge PR** | `gh pr merge` → pushes to `main` → triggers production pipeline |
 
 Each PR receives a **completely isolated environment** — the PR's code is tested against a real stack before it ever touches `main`.
@@ -671,11 +673,11 @@ After clicking Logout, the URL remains within the preview domain — `/login` is
 
 ---
 
-#### PR Preview E2E: 45/45 Pass
+#### PR Preview E2E: 52/52 Pass
 
 ![PR Preview E2E](docs/screenshots/46-phase2-e2e-results.png)
 
-All 45 Playwright tests pass in the isolated PR preview environment. The `user can log out` test verifies the new backchannel logout behaviour. With the E2E gate passed, Jenkins automatically merges the PR to `main` — no human approval is needed. The test suite is the gate.
+All 52 Playwright tests pass in the isolated PR preview environment. The `user can log out` test verifies the new backchannel logout behaviour. With the E2E gate passed, Jenkins automatically merges the PR to `main` — no human approval is needed. The test suite is the gate.
 
 ---
 
@@ -698,7 +700,7 @@ Six stages — the simplest pipeline, no rebuild required:
 | 3 | **Update Overlay** | Write same tag to `gitops/overlays/prod/kustomization.yaml` → push to `main` |
 | 4 | **ArgoCD Sync** | `argocd app wait student-app-prod --health` — prod canary rollout |
 | 5 | **Seed DB** | Seed production database (idempotent) |
-| 6 | **E2E Tests** | 45 Playwright tests against `prod.student.local:8080` |
+| 6 | **E2E Tests** | 52 Playwright tests against `prod.student.local:8080` |
 
 The image promoted to production is byte-for-byte identical to what ran in dev and PR preview — no "works on my machine" risk.
 
@@ -736,11 +738,11 @@ The URL reads `prod.student.local:8080/login` — the user remained entirely wit
 
 ---
 
-#### Production E2E: All 45 Tests Pass
+#### Production E2E: All 52 Tests Pass
 
 ![Prod E2E Results](docs/screenshots/52-phase3-e2e-results.png)
 
-All 45 Playwright tests pass in production, confirming the complete stack is healthy following the canary deployment. The `user can log out` test passes: URL ends at `/login` without any Keycloak redirect. This is the final automated gate — feature delivery is complete.
+All 52 Playwright tests pass in production, confirming the complete stack is healthy following the canary deployment. The `user can log out` test passes: URL ends at `/login` without any Keycloak redirect. This is the final automated gate — feature delivery is complete.
 
 ---
 
@@ -780,7 +782,7 @@ Developer commits logout fix to cicd branch
 │  │  → fastapi-app: Healthy ✅           │                         │
 │  └─────────────────────────────────────┘                         │
 │            │                                                     │
-│            ▼  45 Playwright E2E tests → ALL PASS ✅              │
+│            ▼  52 Playwright E2E tests → ALL PASS ✅              │
 │  gh pr create cicd → main                                        │
 └─────────────────────────────────────────────────────────────────┘
             │
@@ -797,7 +799,7 @@ Developer commits logout fix to cicd branch
 │  │  → student-app-pr-N: Healthy ✅     │                         │
 │  └─────────────────────────────────────┘                         │
 │            │                                                     │
-│            ▼  45 E2E tests on PR env → ALL PASS ✅               │
+│            ▼  52 E2E tests on PR env → ALL PASS ✅               │
 │  gh pr merge → main (auto)                                       │
 │  ArgoCD prunes student-app-pr-N namespace (auto ~30s)            │
 └─────────────────────────────────────────────────────────────────┘
@@ -817,7 +819,7 @@ Developer commits logout fix to cicd branch
 │  │  → student-app-prod: Healthy ✅     │                         │
 │  └─────────────────────────────────────┘                         │
 │            │                                                     │
-│            ▼  45 E2E tests on prod → ALL PASS ✅                 │
+│            ▼  52 E2E tests on prod → ALL PASS ✅                 │
 │  Feature LIVE in production                                      │
 └─────────────────────────────────────────────────────────────────┘
 ```
@@ -830,7 +832,7 @@ Developer commits logout fix to cicd branch
 | Pipeline stages total | 24 (8 dev + 10 preview + 6 prod) |
 | Docker builds | 2 (dev images — reused for prod) |
 | Canary rollouts | 3 (dev + preview + prod) |
-| E2E tests run | 135 (45 × 3 environments) |
+| E2E tests run | 156 (52 × 3 environments) |
 | Human approvals required | **0** |
 | Environments validated | 3 (dev, PR preview, prod) |
 | Production downtime | **Zero** |
@@ -839,4 +841,4 @@ Developer commits logout fix to cicd branch
 
 ---
 
-*Updated: February 20, 2026 | Branch: `argo-rollout` | Commit: `5bc3bf4`*
+*Updated: February 21, 2026 | Branch: `argo-rollout` | Commit: `f98163d` | Image: `dev-fbd8de7`*
