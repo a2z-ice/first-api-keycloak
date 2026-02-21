@@ -316,21 +316,39 @@ remove_hosts_entry() {
     return 0
   fi
   local CMD="sudo sed -i '' '/${HOST}/d' /etc/hosts"
-  while true; do
-    echo ""
-    echo -e "  ${YELLOW}${BOLD}╔══════════════════════════════════════════════════╗${NC}"
-    echo -e "  ${YELLOW}${BOLD}║  ACTION REQUIRED — remove /etc/hosts entry       ║${NC}"
-    echo -e "  ${YELLOW}${BOLD}╚══════════════════════════════════════════════════╝${NC}"
-    echo -e "  Run this command in another terminal:\n"
-    echo -e "    ${CYAN}${CMD}${NC}\n"
-    printf "  Press Enter once done (Ctrl+C to abort): "
-    read -r < /dev/tty
-    if ! grep -q "$HOST" /etc/hosts 2>/dev/null; then
-      log_success "$HOST removed from /etc/hosts"
-      return 0
-    fi
-    log_warn "$HOST still found — please run the command and press Enter again"
-  done
+  echo ""
+  echo -e "  ${YELLOW}${BOLD}╔══════════════════════════════════════════════════╗${NC}"
+  echo -e "  ${YELLOW}${BOLD}║  ACTION REQUIRED — remove /etc/hosts entry       ║${NC}"
+  echo -e "  ${YELLOW}${BOLD}╚══════════════════════════════════════════════════╝${NC}"
+  echo -e "  Run this command in another terminal:\n"
+  echo -e "    ${CYAN}${CMD}${NC}\n"
+  if [[ -e /dev/tty ]] && echo "" > /dev/tty 2>/dev/null; then
+    while true; do
+      printf "  Press Enter once done (Ctrl+C to abort): "
+      read -r < /dev/tty
+      if ! grep -q "$HOST" /etc/hosts 2>/dev/null; then
+        log_success "$HOST removed from /etc/hosts"
+        return 0
+      fi
+      log_warn "$HOST still found — please run the command and press Enter again"
+    done
+  else
+    log_info "No terminal detected — waiting up to 10 min for $HOST to be removed..."
+    local elapsed=0
+    while [[ $elapsed -lt 600 ]]; do
+      sleep 5
+      elapsed=$((elapsed + 5))
+      if ! grep -q "$HOST" /etc/hosts 2>/dev/null; then
+        log_success "$HOST removed from /etc/hosts (after ${elapsed}s)"
+        return 0
+      fi
+      if (( elapsed % 30 == 0 )); then
+        log_info "Still waiting for $HOST removal (${elapsed}s elapsed)..."
+        log_info "Run in another terminal: ${CMD}"
+      fi
+    done
+    log_warn "$HOST still in /etc/hosts after 10 minutes — continuing anyway"
+  fi
 }
 
 check_and_fix_coredns() {
