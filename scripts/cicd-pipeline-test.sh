@@ -159,7 +159,7 @@ setup_argocd_login() {
   password=$(kubectl -n argocd get secret argocd-initial-admin-secret \
     -o jsonpath='{.data.password}' | base64 -d)
   argocd login "localhost:${ARGOCD_LOCAL_PORT}" \
-    --username admin --password "$password" --insecure &>/dev/null
+    --username admin --password "$password" --insecure --plaintext &>/dev/null
   log_success "ArgoCD CLI logged in via NodePort localhost:${ARGOCD_LOCAL_PORT}"
 }
 
