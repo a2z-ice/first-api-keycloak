@@ -99,3 +99,37 @@ Updated the comment from "Keycloak redirects back to login page" to "backend cle
 1. Log in as any user → click Logout → URL stays at `/login` (no `idp.keycloak.com` visible)
 2. Check Keycloak Admin console → Sessions → verify no active session for the user
 3. E2E: `cd frontend && APP_URL=http://dev.student.local:8080 npx playwright test tests/e2e/auth.spec.ts`
+
+---
+
+## Deployment Results (2026-02-20)
+
+**Additional fix applied during deployment:** Commit `5bc3bf4` changed `return {"redirect": "/login"}` → `return {"redirect": "/"}` so the frontend navigates to root and React Router `ProtectedRoute` handles the `/login` redirect. This matches the user's expected flow ("redirected to home page which then redirects to login page").
+
+**Image tag:** `dev-5bc3bf4`
+
+**Socat proxy issue discovered:** The existing `argocd-http-proxy` + `argocd-https-proxy` Docker containers had been started with node IP `172.19.0.2` but the current cluster node IP was `172.19.0.3`. This caused the `setup_argocd_login()` check in `cicd-pipeline-test.sh` to time out. Fix: recreate proxy containers with correct node IP before running the pipeline. See CLAUDE.md "Current State" section for the recreate command.
+
+**Pipeline phases run via `cicd-pipeline-test.sh --skip-setup`:**
+
+| Phase | Environment | Image Tag | E2E | Time |
+|-------|-------------|-----------|-----|------|
+| 1 (dev) | `student-app-dev` | `dev-5bc3bf4` | 45/45 ✅ | 15.9s |
+| 2 (PR preview) | `student-app-pr-7` | `pr-7-72794915` | 45/45 ✅ | 17.1s |
+| 3 (prod) | `student-app-prod` | `dev-5bc3bf4` | 45/45 ✅ | 16.7s |
+
+**Git branches after deployment:**
+- `argo-rollout` @ `72f6cd8` (fix commit + presentation Section 13)
+- `dev` @ `01fb198` (dev overlay: `dev-5bc3bf4`)
+- `main` @ `14c4063` (prod overlay: `dev-5bc3bf4`)
+
+**Presentation:** Section 13 added to `presentation.md` — 244 lines documenting the bug report, root cause, fix, all three pipeline phases, and summary table.
+
+**Phase 2 note:** The pipeline prompts for a `/etc/hosts` entry via `/dev/tty`. When running non-interactively (e.g., from Claude Code), add the entry manually _before_ running:
+```bash
+echo '127.0.0.1 pr-N.student.local' | sudo tee -a /etc/hosts
+```
+Then use `--pr-number N` to reuse the already-created PR and skip recreation. After Phase 2 completes, remove with:
+```bash
+sudo sed -i '' '/pr-N.student.local/d' /etc/hosts
+```

@@ -310,3 +310,68 @@ Test users: `admin-user`/`admin123` (admin), `student-user`/`student123` (studen
 ### Full Test Guide
 
 See `cicd-test-instruction.md` for the complete step-by-step instructions to test all three pipeline phases (dev, PR preview, prod promotion) with exact shell commands.
+
+---
+
+## Plans & Implementation History
+
+Each plan doc is self-contained: problem statement, files changed, exact code diffs, and verification steps.
+
+| Plan | File | Status | Summary |
+|------|------|--------|---------|
+| 1 | `plans/1-keycloak-oauth21-student-mgmt.md` | Done | Initial Keycloak + FastAPI + OAuth2.1 PKCE setup |
+| 2 | `plans/2-multi-replica-deploy-auth-refactor.md` | Done | Multi-replica K8s deploy, Redis sessions, PostgreSQL |
+| 3 | `plans/3-react-frontend-bff-migration.md` | Done | React 19 SPA + Nginx BFF, Playwright E2E suite |
+| 4 | `plans/4-playwright-fail-screenshot-demo.md` | Done | Deliberately-failing test to verify screenshot capture |
+| 5 | `plans/5-argocd-gitops-multi-env-pipeline.md` | Done | ArgoCD GitOps, Jenkins CI, PR preview, List/PR generators |
+| 6 | `plans/6-argocd-v331-argo-rollouts.md` | Done | ArgoCD v3.3.1 upgrade, Argo Rollouts v1.8.4 canary CRDs |
+| 7 | `plans/7-logout-fix-backchannel.md` | Done | Backchannel Keycloak logout fix + full 3-env pipeline run |
+
+See `skills/README.md` for the full technology catalog, architectural patterns, and reusable code snippets.
+
+## Current State (as of 2026-02-20)
+
+**Branch:** `argo-rollout` (latest: commit `72f6cd8`)
+**Deployed image:** `dev-5bc3bf4` in both `student-app-dev` and `student-app-prod`
+
+**What is running:**
+- ArgoCD v3.3.1 — `student-app-dev` (Synced + Healthy), `student-app-prod` (Synced + Healthy)
+- Argo Rollouts v1.8.4 — canary Rollouts for `fastapi-app` + `frontend-app` in both envs
+- Nginx Ingress — `dev.student.local:8080`, `prod.student.local:8080`
+- Registry: `localhost:5001` with `fastapi-student-app` + `frontend-student-app` tags
+- ArgoCD accessible via socat Docker proxies on `localhost:30080` (HTTP) / `localhost:30081` (HTTPS)
+
+**To resume pipeline after context clear:**
+```bash
+# 1. Verify cluster
+kubectl cluster-info
+
+# 2. Verify ArgoCD proxies (must show argocd-http-proxy + argocd-https-proxy)
+docker ps --filter name=argocd --format "{{.Names}}: {{.Ports}}"
+
+# 3. If proxies missing OR forwarding wrong IP (check with docker inspect argocd-http-proxy --format '{{.Args}}'):
+NODE_IP=$(kubectl get nodes -o jsonpath='{.items[0].status.addresses[?(@.type=="InternalIP")].address}')
+docker rm -f argocd-http-proxy argocd-https-proxy
+docker run -d --name argocd-http-proxy --network kind --restart unless-stopped \
+  -p 30080:30080 alpine/socat TCP-LISTEN:30080,fork,reuseaddr TCP:${NODE_IP}:30080
+docker run -d --name argocd-https-proxy --network kind --restart unless-stopped \
+  -p 30081:30081 alpine/socat TCP-LISTEN:30081,fork,reuseaddr TCP:${NODE_IP}:30081
+
+# 4. ArgoCD CLI needs port-forward (socat passes HTTP but not gRPC)
+kubectl port-forward svc/argocd-server 18080:80 -n argocd &
+argocd login localhost:18080 --insecure --username admin \
+  --password "$(kubectl -n argocd get secret argocd-initial-admin-secret -o jsonpath='{.data.password}' | base64 -d)"
+
+# 5. Check state
+argocd app list
+kubectl get rollouts -A
+kubectl get pods -n student-app-dev
+kubectl get pods -n student-app-prod
+
+# 6. Run full pipeline (all 3 phases)
+GITHUB_TOKEN=$(kubectl get secret github-token -n argocd -o jsonpath='{.data.token}' | base64 -d)
+GITHUB_TOKEN=$GITHUB_TOKEN ./scripts/cicd-pipeline-test.sh --skip-setup
+# NOTE: script will pause and ask you to add /etc/hosts entry for pr-N.student.local — do it then press Enter
+```
+
+**Known socat proxy issue:** If `docker inspect argocd-http-proxy --format '{{.Args}}'` shows an old node IP, the proxy will silently time out. Always recreate proxies (step 3 above) after cluster recreation.

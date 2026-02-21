@@ -419,7 +419,7 @@ COPY nginx.conf /etc/nginx/conf.d/default.conf
 | GET | `/api/auth/login` | none | Redirect to Keycloak |
 | GET | `/api/auth/callback` | none | OAuth callback |
 | GET | `/api/auth/me` | session | Current user + roles |
-| POST | `/api/auth/logout` | session | Clear session, return logout URL |
+| POST | `/api/auth/logout` | session | Backchannel logout Keycloak + clear session, return `{"redirect": "/"}` |
 | GET | `/api/students/` | authenticated | List students (role-filtered) |
 | POST | `/api/students/` | admin | Create student |
 | GET | `/api/students/{id}` | authenticated | Student detail (ownership check) |
@@ -441,3 +441,113 @@ async function apiFetch<T>(url: string, options?: RequestInit): Promise<T> {
 
 - `credentials: 'include'` ensures session cookies are sent
 - `ApiError` class carries status code for role-based error handling in UI
+
+---
+
+## Auth Patterns
+
+### Backchannel Logout (Server-Side Keycloak Session Termination)
+
+Instead of redirecting the browser through Keycloak's logout page (front-channel), the backend silently POSTs the `refresh_token` to Keycloak's token revocation endpoint. The user stays entirely within the app domain.
+
+```python
+# backend/app/routes/auth_routes.py
+@router.post("/logout")
+async def logout(request: Request):
+    token_data = request.session.get("token", {})
+    refresh_token = token_data.get("refresh_token", "")
+
+    if refresh_token:
+        try:
+            async with httpx.AsyncClient(verify=False) as client:
+                await client.post(
+                    f"{settings.keycloak_url}/realms/{settings.keycloak_realm}"
+                    f"/protocol/openid-connect/logout",
+                    data={
+                        "client_id": settings.keycloak_client_id,
+                        "client_secret": settings.keycloak_client_secret,
+                        "refresh_token": refresh_token,
+                    },
+                )
+        except Exception:
+            pass  # Best-effort — clear session regardless
+
+    request.session.clear()
+    return {"redirect": "/"}   # Root; ProtectedRoute detects unauthenticated → /login
+```
+
+Key points:
+- `verify=False` — Keycloak uses a self-signed cert; this is a pod-internal call
+- `try/except pass` — failed Keycloak call must never prevent local session clearing
+- Return `{"redirect": "/"}` not `{"redirect": "/login"}` — React Router `ProtectedRoute` handles the final redirect to `/login` after detecting unauthenticated state
+- `refresh_token` must be stored in session during OAuth callback (`token.get("refresh_token", "")`)
+
+**Frontend side:**
+```typescript
+// src/api/auth.ts
+export async function logout(): Promise<{ redirect: string }> {
+  const res = await apiFetch<{ redirect: string }>('/api/auth/logout', { method: 'POST' });
+  return res;
+}
+
+// src/components/Navbar.tsx
+const { redirect } = await logout();
+navigate(redirect);  // SPA navigate — no page reload, no Keycloak URL visible
+```
+
+---
+
+## Operational Gotchas
+
+### socat Proxy Stale Node IP
+
+**Symptom:** `cicd-pipeline-test.sh` times out at "Waiting for ArgoCD to be reachable at localhost:30080" even though `docker ps` shows the proxy containers are running.
+
+**Cause:** The `argocd-http-proxy` and `argocd-https-proxy` Docker containers were started with an old Kind node IP. After cluster recreation the node IP changes, but `--restart unless-stopped` keeps the old containers running with the stale destination.
+
+**Diagnosis:**
+```bash
+docker inspect argocd-http-proxy --format '{{.Args}}'
+# Shows: [TCP-LISTEN:30080,fork,reuseaddr TCP:172.19.0.2:30080]
+kubectl get nodes -o jsonpath='{.items[0].status.addresses[?(@.type=="InternalIP")].address}'
+# Shows: 172.19.0.3  ← mismatch!
+```
+
+**Fix:** Recreate proxy containers with the correct node IP:
+```bash
+NODE_IP=$(kubectl get nodes -o jsonpath='{.items[0].status.addresses[?(@.type=="InternalIP")].address}')
+docker rm -f argocd-http-proxy argocd-https-proxy
+docker run -d --name argocd-http-proxy --network kind --restart unless-stopped \
+  -p 30080:30080 alpine/socat TCP-LISTEN:30080,fork,reuseaddr TCP:${NODE_IP}:30080
+docker run -d --name argocd-https-proxy --network kind --restart unless-stopped \
+  -p 30081:30081 alpine/socat TCP-LISTEN:30081,fork,reuseaddr TCP:${NODE_IP}:30081
+```
+
+**Prevention:** After every cluster recreation, rerun `bash scripts/setup-argocd.sh` which recreates the proxies with the fresh node IP.
+
+### ArgoCD CLI gRPC via socat
+
+socat passes TCP (HTTP/1.1) but not gRPC (HTTP/2). The `argocd` CLI uses gRPC, so it cannot connect through the socat NodePort proxy on `localhost:30080`.
+
+- **Browser UI** → use `http://localhost:30080` (socat works fine for HTTP)
+- **`argocd` CLI** → always use `kubectl port-forward`:
+  ```bash
+  kubectl port-forward svc/argocd-server 18080:80 -n argocd &
+  argocd login localhost:18080 --insecure --username admin \
+    --password "$(kubectl -n argocd get secret argocd-initial-admin-secret -o jsonpath='{.data.password}' | base64 -d)"
+  ```
+
+### Phase 2 PR Preview /etc/hosts Prompt
+
+`cicd-pipeline-test.sh` Phase 2 pauses and reads from `/dev/tty` to confirm the user has added a `/etc/hosts` entry for `pr-N.student.local`. This cannot be automated from Claude Code (no `/dev/tty`).
+
+**Workaround:**
+1. Add the entry manually before the script reaches that point:
+   ```bash
+   echo '127.0.0.1 pr-N.student.local' | sudo tee -a /etc/hosts
+   ```
+2. If the PR was already created, reuse it with `--pr-number N` (script skips creation and checks hosts entry, which now passes immediately).
+3. After Phase 2 completes, remove the entry:
+   ```bash
+   sudo sed -i '' '/pr-N.student.local/d' /etc/hosts
+   ```
