@@ -48,7 +48,7 @@ Developer → Git Push → GitHub
 | Component | Technology | Version |
 |-----------|-----------|---------|
 | Container Orchestration | Kubernetes (Kind) | v1.35 |
-| GitOps Controller | ArgoCD | v3.0.5 |
+| GitOps Controller | ArgoCD | v3.3.1 |
 | Canary Deployments | Argo Rollouts | v1.8.4 |
 | Identity Provider | Keycloak | 26.5.3 |
 | Backend API | FastAPI (Python) | Latest |
@@ -87,11 +87,7 @@ Kubernetes (canary rollout via Argo Rollouts)
 
 ![Jenkins Dashboard](docs/screenshots/20-jenkins-dashboard.png)
 
-**What this shows:**
-- Jenkins 2.541.2 running at `http://localhost:8090`
-- Three pipeline jobs: `student-app-dev`, `student-app-pr-preview`, `student-app-prod`
-- `student-app-dev` has build #1 (failed due to Groovy backtick syntax — fixed in the actual cicd branch run via `cicd-pipeline-test.sh`)
-- `student-app-pr-preview` and `student-app-prod` await their triggers (webhook or manual)
+Jenkins 2.541.2 runs at `http://localhost:8090` with three pipeline jobs visible: `student-app-dev`, `student-app-pr-preview`, and `student-app-prod`. The `student-app-dev` job shows build #1, which failed due to a Groovy backtick syntax issue fixed in the actual `cicd` branch run via `cicd-pipeline-test.sh`. The remaining two jobs await their respective triggers.
 
 ---
 
@@ -99,10 +95,7 @@ Kubernetes (canary rollout via Argo Rollouts)
 
 ![Jenkins Dev Job](docs/screenshots/21-jenkins-dev-job.png)
 
-**What this shows:**
-- `student-app-dev` job configured with `Jenkinsfile.dev` from the `cicd` branch
-- Pipeline source: `https://github.com/a2z-ice/first-api-keycloak.git`
-- The job runs the full dev pipeline: build → push → deploy → E2E tests → open PR
+The `student-app-dev` job is configured with `Jenkinsfile.dev` from the `cicd` branch, sourced from `https://github.com/a2z-ice/first-api-keycloak.git`. It executes the full dev pipeline: build → push → GitOps overlay update → ArgoCD sync → E2E tests → open PR to `main`.
 
 ---
 
@@ -110,11 +103,7 @@ Kubernetes (canary rollout via Argo Rollouts)
 
 ![Jenkins PR Preview Job](docs/screenshots/22-jenkins-pr-preview-job.png)
 
-**What this shows:**
-- `student-app-pr-preview` job — triggered when a GitHub PR gets the `preview` label
-- Creates a fully isolated Kubernetes namespace `student-app-pr-{N}` with its own DB, Redis, and app instances
-- Runs 45 E2E tests against the PR's specific code before it reaches main
-- When tests pass, it **merges the PR** automatically
+The `student-app-pr-preview` job triggers when a GitHub PR receives the `preview` label. It provisions a fully isolated Kubernetes namespace (`student-app-pr-{N}`) with its own database, Redis, and application instances, runs 45 E2E tests against the PR's specific code, and — if tests pass — automatically merges the PR.
 
 ---
 
@@ -122,10 +111,7 @@ Kubernetes (canary rollout via Argo Rollouts)
 
 ![Jenkins Prod Job](docs/screenshots/23-jenkins-prod-job.png)
 
-**What this shows:**
-- `student-app-prod` job — triggered automatically when main branch changes (PR merge)
-- **Does NOT rebuild Docker images** — reuses the same image tag that passed dev E2E tests
-- Updates `gitops/overlays/prod/kustomization.yaml` → pushes to `main` → ArgoCD auto-syncs production
+The `student-app-prod` job triggers automatically when the `main` branch changes (PR merge). It does **not** rebuild Docker images — it reuses the same image tag that passed dev E2E tests — then updates `gitops/overlays/prod/kustomization.yaml`, pushes to `main`, and ArgoCD auto-syncs production.
 
 ---
 
@@ -133,19 +119,13 @@ Kubernetes (canary rollout via Argo Rollouts)
 
 ![Jenkins Credentials](docs/screenshots/24-jenkins-credentials.png)
 
-**What this shows:**
-- `ARGOCD_PASSWORD` — ArgoCD admin password used to authenticate CLI commands (`argocd app wait`)
-- `GITHUB_TOKEN` — GitHub PAT used for `gh pr create`, `gh pr merge`, and labeling PRs
-- Credentials stored securely in Jenkins, never hardcoded in Jenkinsfiles
-- Jenkins injects them at build time via `credentials()` binding
+Two credentials are stored securely in Jenkins and never hardcoded in any Jenkinsfile: `ARGOCD_PASSWORD` (ArgoCD admin password for CLI commands such as `argocd app wait`) and `GITHUB_TOKEN` (GitHub PAT for `gh pr create`, `gh pr merge`, and label management). Jenkins injects both at build time via `credentials()` binding.
 
 ---
 
 ### 2.6 Dev Pipeline Stages (All 8 Stages)
 
 ![Dev Pipeline Stages](docs/screenshots/25-jenkins-pipeline-dev-stages.png)
-
-**Stage-by-stage explanation:**
 
 | # | Stage | What Jenkins does |
 |---|-------|------------------|
@@ -164,7 +144,7 @@ Kubernetes (canary rollout via Argo Rollouts)
 
 ![PR Preview Pipeline Stages](docs/screenshots/26-jenkins-pipeline-preview-stages.png)
 
-**This pipeline is the most complex — it creates a full isolated environment:**
+The PR preview pipeline is the most complex — it creates a fully isolated environment per pull request:
 
 | # | Stage | What Jenkins does |
 |---|-------|------------------|
@@ -185,7 +165,7 @@ Kubernetes (canary rollout via Argo Rollouts)
 
 ![Prod Pipeline Stages](docs/screenshots/27-jenkins-pipeline-prod-stages.png)
 
-**Production is the simplest pipeline — no rebuild:**
+Production is the simplest pipeline — no rebuild required:
 
 | # | Stage | What Jenkins does |
 |---|-------|------------------|
@@ -202,77 +182,55 @@ Kubernetes (canary rollout via Argo Rollouts)
 
 ArgoCD manages all environments from a single control plane. Both **development** and **production** environments are `Healthy` and `Synced`.
 
-### 2.1 Application List — Both Environments Healthy
+### 3.1 Application List — Both Environments Healthy
 
 ![ArgoCD Application List](docs/screenshots/01-argocd-app-list.png)
 
-**What this shows:**
-- `student-app-dev` — Healthy ✅ | Synced ✅ | Watching `dev` branch
-- `student-app-prod` — Healthy ✅ | Synced ✅ | Watching `main` branch
-- Last sync: 5 hours ago (automated, no manual intervention)
-- Both apps track the same GitHub repository, different overlays
+The ArgoCD application list confirms both environments are fully operational: `student-app-dev` (Healthy ✅ | Synced ✅ | watching `dev` branch) and `student-app-prod` (Healthy ✅ | Synced ✅ | watching `main` branch). Last sync was automated five hours prior — no manual intervention required. Both applications track the same GitHub repository through separate Kustomize overlays.
 
 ---
 
-### 2.2 Development Environment — Resource Tree
+### 3.2 Development Environment — Application Detail
 
 ![ArgoCD Dev Detail](docs/screenshots/02-argocd-dev-detail.png)
 
-**What this shows:**
-- App Health: **Healthy** (green heart icon)
-- Sync Status: **Synced** to `dev` branch commit `e390745`
-- Last sync succeeded: Feb 20 2026 16:54:55 (automated)
-- 13 resources Synced, 19 resources Healthy
-- Resource tree shows: ConfigMaps, Secrets, Services, Rollouts, Ingress all healthy
-- Commit message: "feat: upgrade ArgoCD v3.0.5→v3.3.1 + install Argo Rollouts"
+The dev application detail confirms: Health **Healthy** (green heart icon), Sync Status **Synced** to `dev` branch commit `e390745`, last sync succeeded Feb 20 2026 at 16:54:55 (automated). Thirteen resources are Synced and nineteen are Healthy. The resource tree shows ConfigMaps, Secrets, Services, Rollouts, and Ingress all in the healthy state. The triggering commit message reads: "feat: upgrade ArgoCD v3.0.5→v3.3.1 + install Argo Rollouts".
 
 ---
 
-### 2.3 Full Resource Tree (Dev Environment)
+### 3.3 Full Resource Tree (Dev Environment)
 
 ![ArgoCD Dev Resource Tree](docs/screenshots/03-argocd-dev-resource-tree.png)
 
-**What this shows:**
-- Complete Kubernetes resource hierarchy managed by ArgoCD
-- All resources in `student-app-dev` namespace are **Synced** and **Healthy**
-- Rollout resources (`fastapi-app`, `frontend-app`) replacing old Deployments
-- ArgoCD tracks every resource — ConfigMaps, Secrets, Services, Ingress, Rollouts
+The complete Kubernetes resource hierarchy in `student-app-dev` is managed by ArgoCD. `Rollout/fastapi-app` and `Rollout/frontend-app` — the Argo Rollouts CRDs — replace the standard Deployment resources. All ConfigMaps, Secrets, Services, and Ingress objects are Synced. Any manual change to the cluster would be immediately flagged as OutOfSync by ArgoCD.
 
 ---
 
-### 2.4 Production Environment Detail
+### 3.4 Production Environment Detail
 
 ![ArgoCD Prod Detail](docs/screenshots/04-argocd-prod-detail.png)
 
-**What this shows:**
-- Production is identically healthy — Synced to `main` branch
-- Same Argo Rollouts canary strategy applied to production
-- Promotion from dev to prod is a single Git push (`cicd → main`)
-- No separate deployment scripts — Git is the source of truth
+Production is identically healthy — Synced to the `main` branch with the same Argo Rollouts canary strategy. Promotion from dev to prod is a single Git push (`cicd → main`); no separate deployment scripts exist. Git remains the single source of truth for both environments.
 
 ---
 
-### 2.5 ArgoCD Resource Inspector
+### 3.5 ArgoCD Resource Inspector
 
 ![ArgoCD Resource Panel](docs/screenshots/05-argocd-rollout-resource-panel.png)
 
-**What this shows:**
-- ArgoCD's resource detail view — live manifest browser
-- Shows the actual Kubernetes YAML currently applied in the cluster
-- Configuration visible: `KEYCLOAK_URL`, `DATABASE_URL`, `APP_URL`
-- ArgoCD tracks drift: any manual change to the cluster is detected and flagged as OutOfSync
+ArgoCD's resource detail view provides a live manifest browser for every Kubernetes object. The active configuration is visible — `KEYCLOAK_URL`, `DATABASE_URL`, `APP_URL` — and drift detection is continuous: any manual change to the cluster is detected and flagged as OutOfSync within the ArgoCD sync interval.
 
 ---
 
 ## 4. Argo Rollouts — Canary Deployment Strategy
 
-Argo Rollouts replaces Kubernetes `Deployment` resources with `Rollout` resources that implement advanced deployment strategies. The canary strategy routes a portion of real traffic to the new version before full rollout.
+Argo Rollouts replaces Kubernetes `Deployment` resources with `Rollout` resources that implement advanced deployment strategies. The canary strategy routes a portion of real traffic to the new version before completing the full rollout.
 
-### 3.1 Canary Steps Configured
+### 4.1 Canary Steps Configured
 
 ![Rollout Canary Strategy](docs/screenshots/18-kubectl-rollout-describe-canary.png)
 
-**FastAPI Backend canary steps:**
+The FastAPI backend is configured with the following canary progression:
 
 | Step | Action | Duration |
 |------|--------|---------|
@@ -282,67 +240,47 @@ Argo Rollouts replaces Kubernetes `Deployment` resources with `Rollout` resource
 | 4 | Pause | 10 seconds |
 | 5 | Complete | — |
 
-**What this means in practice:**
-- With 2 replicas: 1 pod runs new code, 1 pod runs old code
-- For 15 seconds, real users hit both versions — Rollouts checks health
-- If the new pod fails health checks, the rollout **automatically aborts** and routes back to the stable version
-- Total canary window: ~25 seconds of pauses + pod startup time
+With two replicas, one pod runs the new code while one pod runs the old code during the canary window. If the new pod fails health checks, the rollout **automatically aborts** and routes all traffic back to the stable version. Total canary window: ~25 seconds of pauses plus pod startup time.
 
 ---
 
-### 3.2 Rollouts Running in Dev Environment
+### 4.2 Rollouts Running in Dev Environment
 
 ![Kubectl Rollouts Dev](docs/screenshots/14-kubectl-rollouts-dev.png)
 
-**What this shows:**
-- Both `fastapi-app` and `frontend-app` are Argo Rollouts in dev
-- DESIRED: 2, CURRENT: 2, UP-TO-DATE: 2, AVAILABLE: 2
-- Running for 4h56m — stable after initial canary deployment
+Both `fastapi-app` and `frontend-app` appear as Argo Rollouts in the dev namespace: DESIRED=2, CURRENT=2, UP-TO-DATE=2, AVAILABLE=2. The rollouts have been stable for 4h56m following the initial canary deployment, with all replicas serving traffic from the current revision.
 
 ---
 
-### 3.3 Rollouts Running in Production
+### 4.3 Rollouts Running in Production
 
 ![Kubectl Rollouts Prod](docs/screenshots/15-kubectl-rollouts-prod.png)
 
-**What this shows:**
-- Production mirrors dev — identical Rollout configuration
-- Both Rollouts fully available (2/2 replicas)
-- Production promoted from dev after all E2E tests passed
+Production mirrors dev with an identical Rollout configuration. Both rollouts report fully available (2/2 replicas), having been promoted from dev after all E2E tests passed. The same canary steps execute in production as in dev.
 
 ---
 
-### 3.4 Argo Rollouts Controller
+### 4.4 Argo Rollouts Controller
 
 ![Argo Rollouts Controller](docs/screenshots/17-kubectl-argo-rollouts-controller.png)
 
-**What this shows:**
-- Argo Rollouts controller running in dedicated `argo-rollouts` namespace
-- 1/1 Ready, Status: Running, 0 restarts — stable controller
-- The controller watches all Rollout CRDs across namespaces and manages canary progression
+The Argo Rollouts controller runs in its dedicated `argo-rollouts` namespace: 1/1 Ready, Status Running, 0 restarts. The controller watches all Rollout CRDs across namespaces and manages canary progression, health checks, and automatic abort logic without any manual intervention.
 
 ---
 
-### 3.5 ArgoCD Application Status (All Environments)
+### 4.5 ArgoCD Application Status (All Environments)
 
 ![ArgoCD Apps kubectl](docs/screenshots/16-kubectl-argocd-apps.png)
 
-**What this shows:**
-- `student-app-dev` — STATUS: Synced, HEALTH: Healthy
-- `student-app-prod` — STATUS: Synced, HEALTH: Healthy
-- ArgoCD natively understands Rollout health (no plugins required)
+The `kubectl` view of ArgoCD applications confirms: `student-app-dev` (STATUS: Synced, HEALTH: Healthy) and `student-app-prod` (STATUS: Synced, HEALTH: Healthy). ArgoCD v3.3.1 natively understands Rollout health — no additional plugins are required.
 
 ---
 
-### 3.6 Custom Resource Definitions Installed
+### 4.6 Custom Resource Definitions Installed
 
 ![Rollout CRDs](docs/screenshots/19-rollout-crds.png)
 
-**What this shows:**
-- All Argo Rollouts CRDs installed and registered in Kubernetes
-- `rollouts.argoproj.io` — the main Rollout resource
-- `analysisruns.argoproj.io`, `analysistemplates.argoproj.io` — automated analysis
-- `experiments.argoproj.io` — A/B testing support (available but not yet used)
+All Argo Rollouts CRDs are installed and registered in the cluster: `rollouts.argoproj.io` (the primary Rollout resource), `analysisruns.argoproj.io` and `analysistemplates.argoproj.io` (automated canary analysis), and `experiments.argoproj.io` (A/B testing support, available but not yet used in this project).
 
 ---
 
@@ -350,95 +288,71 @@ Argo Rollouts replaces Kubernetes `Deployment` resources with `Rollout` resource
 
 The Student Management System is a full-stack web application secured with OAuth2.1 and Keycloak. Access is role-based: admins see everything, staff see students but cannot edit, students see only their own record.
 
-### 4.1 Authentication — Keycloak Login Page
+### 5.1 Authentication — Keycloak Login Page
 
 ![Keycloak Login](docs/screenshots/06-keycloak-login-page.png)
 
-**What this shows:**
-- Standard Keycloak login flow (OAuth2.1 + PKCE)
-- Users authenticate against Keycloak — credentials never reach the application server
-- After login, Keycloak redirects back to the app with a secure session token
+The standard Keycloak login flow implements OAuth2.1 + PKCE. User credentials are submitted directly to Keycloak — they never reach the application server. After successful authentication, Keycloak redirects back to `/api/auth/callback`, which stores the session token in Redis and sets a secure session cookie.
 
 ---
 
-### 4.2 Admin Dashboard
+### 5.2 Admin Dashboard
 
 ![Dev Dashboard Admin](docs/screenshots/07-dev-dashboard-admin.png)
 
-**What this shows:**
-- Admin user (`admin-user`) sees full dashboard
-- Role badge displayed in navbar: `admin`
-- Quick access to Students and Departments management
-- Welcome message personalised with Keycloak user name
+The admin user (`admin-user`) lands on the full dashboard with quick access to Students and Departments management. The navbar displays the authenticated user's name alongside the `admin` role badge returned from Keycloak's token claims. The welcome message is personalised with the Keycloak user name.
 
 ---
 
-### 4.3 Student Management (Admin View — Full Access)
+### 5.3 Student Management (Admin View — Full Access)
 
 ![Dev Students Admin](docs/screenshots/08-dev-students-list-admin.png)
 
-**What this shows:**
-- Admin sees ALL students across all departments
-- Add Student and Edit buttons visible (admin-only controls)
-- Data filtered server-side based on Keycloak role claims
+An admin user sees all students across all departments. The Add Student and Edit buttons are visible — these controls are admin-only and are conditionally rendered based on role claims returned by `GET /api/auth/me`. Data filtering is enforced server-side at the FastAPI layer, not only in the UI.
 
 ---
 
-### 4.4 Department Management
+### 5.4 Department Management
 
 ![Dev Departments](docs/screenshots/09-dev-departments-list.png)
 
-**What this shows:**
-- Department listing with admin controls
-- All departments visible to all authenticated users
-- Only admins see Create/Edit controls
+The department listing is visible to all authenticated users regardless of role. Create and Edit controls appear only for admins. The server enforces this distinction at the API level — non-admin requests to `POST /api/departments/` return HTTP 403.
 
 ---
 
-### 4.5 Dark Mode Support
+### 5.5 Dark Mode Support
 
 ![Dark Mode](docs/screenshots/10-dev-dashboard-dark-mode.png)
 
-**What this shows:**
-- Full dark mode toggle (persisted in localStorage)
-- Consistent styling across all pages in dark theme
+A full dark mode theme is available via the navbar toggle button. The selected theme persists in `localStorage` and is restored on subsequent visits. All pages — dashboard, student list, department forms — apply the dark theme consistently through CSS custom properties.
 
 ---
 
-### 4.6 Student Role — Limited View
+### 5.6 Student Role — Limited View
 
 ![Student Role View](docs/screenshots/11-dev-students-list-student-role.png)
 
-**What this shows:**
-- Student user sees ONLY their own record (server-enforced, not just hidden in UI)
-- No Add Student or Edit buttons visible
-- RBAC enforced at both API and UI layers
+A student-role user sees only their own record. The Add Student and Edit buttons are absent from the UI. Crucially, the restriction is also enforced at the API layer: a direct `GET /api/students/` request from a student-role session returns only the user's own data, regardless of UI state.
 
 ---
 
 ## 6. Application — Production Environment
 
-Production runs the same code promoted from dev after all E2E tests pass.
+Production runs the same Docker image promoted from dev after all E2E tests pass. The only difference between environments is the Keycloak client configuration and the Kustomize overlay namespace.
 
-### 5.1 Production Dashboard
+### 6.1 Production Dashboard
 
 ![Prod Dashboard](docs/screenshots/12-prod-dashboard-admin.png)
 
-**What this shows:**
-- Production environment identical to dev (same Docker image tag)
-- Separate Keycloak client (`student-app-prod`) for security isolation
-- Admin user logged in and seeing full dashboard
+The production environment at `prod.student.local:8080` is identical to dev in behaviour and appearance. A separate Keycloak client (`student-app-prod`) provides security isolation between environments. The admin user is authenticated and the full dashboard is accessible.
 
 ---
 
-### 5.2 Production Students List
+### 6.2 Production Students List
 
 ![Prod Students](docs/screenshots/13-prod-students-list.png)
 
-**What this shows:**
-- Student data seeded in production environment
-- Full admin view in production
-- Application fully functional post canary deployment
+The production student list confirms seeded data is present and the admin view is fully functional following canary deployment. The application stack — React → Nginx → FastAPI → PostgreSQL → Keycloak — is healthy end-to-end in production.
 
 ---
 
@@ -446,7 +360,7 @@ Production runs the same code promoted from dev after all E2E tests pass.
 
 All 45 automated Playwright tests pass in both environments after canary deployment.
 
-### 6.1 Test Coverage
+### 7.1 Test Coverage
 
 | Test Suite | Tests | Coverage |
 |------------|-------|---------|
@@ -460,7 +374,7 @@ All 45 automated Playwright tests pass in both environments after canary deploym
 | Dark Mode | 2 | Toggle, persistence |
 | **Total** | **45** | **100% pass** |
 
-### 6.2 Test Results Summary
+### 7.2 Test Results Summary
 
 ```
 Dev Environment:   45 passed (18.2s)   ✅
@@ -567,9 +481,7 @@ Kubernetes Cluster (Kind — local)
 
 ---
 
----
-
-## 12. Feature Rollout Demo: Silent Logout Fix
+## 12. Complete Feature Delivery: Backchannel Logout Fix
 
 This section demonstrates a **complete end-to-end feature delivery** — a real code change
 going from developer commit all the way to production through every GitOps pipeline stage,
@@ -598,11 +510,7 @@ Four files changed — all minimal and focused:
 
 ![Git Diff — auth_routes.py](docs/screenshots/30-feature-code-diff.png)
 
-**What this shows:**
-- Lines in red (−): old redirect-URL approach — browser was sent to `idp.keycloak.com/logout?…`
-- Lines in green (+): new backchannel approach — `httpx.AsyncClient` POSTs the `refresh_token` to Keycloak server-side
-- `refresh_token` is now stored in the session during OAuth callback (line `+refresh_token: token.get(...)`)
-- Return value changed from `logout_url` (a Keycloak URL) to `redirect: "/login"` (stays in-app)
+The diff shows the old redirect-URL approach (lines in red) being replaced by the new backchannel approach (lines in green). The `httpx.AsyncClient` POSTs the `refresh_token` to Keycloak server-side — invisible to the browser. The `refresh_token` is now stored in the session during the OAuth callback, and the return value changes from `logout_url` (a Keycloak URL the browser navigates to) to `redirect: "/login"` (a React Router navigation that stays in-app).
 
 ---
 
@@ -610,8 +518,8 @@ Four files changed — all minimal and focused:
 
 ![Before vs After Diagram](docs/screenshots/31-feature-before-after-diagram.png)
 
-**Before:** Browser → App → **redirect to Keycloak** → Keycloak page visible → redirect back
-**After:**  Browser → App → App calls Keycloak silently → **React Router navigate("/login")** — user never leaves the app
+**Before:** Browser → App → redirect to Keycloak → Keycloak page visible → redirect back (broken `post_logout_redirect_uri`)
+**After:**  Browser → App → App calls Keycloak silently via `httpx` → React Router `navigate("/login")` — user never leaves the application domain
 
 ---
 
@@ -625,7 +533,7 @@ automatic canary deployment via Argo Rollouts.
 
 ![Jenkins Dev Pipeline](docs/screenshots/32-phase1-jenkins-dev-pipeline.png)
 
-**8 stages — none are manual:**
+Eight stages complete without any manual step:
 
 | # | Stage | What Jenkins does |
 |---|-------|------------------|
@@ -644,12 +552,7 @@ automatic canary deployment via Argo Rollouts.
 
 ![ArgoCD Dev Syncing](docs/screenshots/33-phase1-argocd-dev-syncing.png)
 
-**What this shows:**
-- ArgoCD detects the new image tag in the `dev` branch overlay
-- Triggers `Rollout` controller (Argo Rollouts) — **not** a standard Deployment
-- Canary step 1: 50% of pods running new version (backchannel logout), 50% running old
-- Status: **Syncing** — rollout in progress
-- This is the risk-reduction window: real traffic split 50/50 for 15 seconds before full promotion
+ArgoCD detects the new image tag in the `dev` branch overlay and triggers the Rollout controller. Canary step 1 routes 50% of pods to the new backchannel logout version while 50% continue serving the previous version. The status shows **Syncing** — the rollout is in progress. This 15-second split window provides the risk-reduction guarantee: if the new pod fails health checks, the rollout aborts automatically.
 
 ---
 
@@ -657,11 +560,7 @@ automatic canary deployment via Argo Rollouts.
 
 ![ArgoCD Dev Healthy](docs/screenshots/34-phase1-argocd-dev-healthy.png)
 
-**What this shows:**
-- Status: **Synced** ✅ | Health: **Healthy** ✅
-- All replicas now running the new image with backchannel logout
-- Canary progressed: 50% (15s pause) → 100% (10s pause) → complete
-- Zero downtime: old pods stayed alive until new pods passed health checks
+Status advances to **Synced** ✅ | Health: **Healthy** ✅. All replicas now run the new image with backchannel logout. The canary progressed through 50% (15s pause) → 100% (10s pause) → complete, with zero downtime: old pods remained alive until new pods passed all health checks.
 
 ---
 
@@ -669,11 +568,7 @@ automatic canary deployment via Argo Rollouts.
 
 ![ArgoCD Dev Resource Tree](docs/screenshots/35-phase1-argocd-dev-resource-tree.png)
 
-**What this shows:**
-- Complete Kubernetes resource hierarchy in `student-app-dev` namespace
-- `Rollout/fastapi-app` and `Rollout/frontend-app` — both Healthy (Argo Rollouts CRDs)
-- All ConfigMaps, Secrets, Services, Ingress objects — Synced
-- ArgoCD tracks every resource; any manual change would be flagged as OutOfSync
+The complete resource hierarchy in `student-app-dev` is Synced and Healthy. `Rollout/fastapi-app` and `Rollout/frontend-app` — both Argo Rollouts CRDs — are healthy. All ConfigMaps, Secrets, Services, and Ingress objects are Synced. ArgoCD's continuous drift detection would flag any out-of-band change to the cluster as OutOfSync immediately.
 
 ---
 
@@ -681,10 +576,7 @@ automatic canary deployment via Argo Rollouts.
 
 ![Dev Keycloak Login](docs/screenshots/36-phase1-dev-keycloak-login.png)
 
-**What this shows:**
-- Standard Keycloak login page — user enters credentials
-- OAuth2.1 + PKCE flow: credentials go to Keycloak, not the app server
-- After login, Keycloak redirects to `/api/auth/callback` which stores the `refresh_token` in the Redis-backed session ← **this is new**
+The standard Keycloak login page accepts user credentials via OAuth2.1 + PKCE — credentials go to Keycloak, not the application server. After successful login, Keycloak redirects to `/api/auth/callback`, which now stores the `refresh_token` in the Redis-backed session — a key addition enabling the backchannel logout in the new implementation.
 
 ---
 
@@ -692,10 +584,7 @@ automatic canary deployment via Argo Rollouts.
 
 ![Dev Dashboard](docs/screenshots/37-phase1-dev-dashboard-logged-in.png)
 
-**What this shows:**
-- Admin user authenticated and viewing the Student Management dashboard
-- Navbar shows user name + role badge (`admin`)
-- **Logout button** — clicking this will trigger the new backchannel logout
+The admin user is authenticated and viewing the Student Management dashboard. The navbar displays the user's name alongside the `admin` role badge. The Logout button — when clicked — triggers the new backchannel logout flow rather than redirecting through Keycloak.
 
 ---
 
@@ -703,11 +592,7 @@ automatic canary deployment via Argo Rollouts.
 
 ![Dev After Logout](docs/screenshots/38-phase1-dev-after-logout.png)
 
-**What this shows:**
-- URL bar: `dev.student.local:8080/login` — **no `idp.keycloak.com` visible**
-- React Router `navigate("/login")` used — it's a SPA navigation, no page reload
-- Meanwhile, the backend has already POST'd the `refresh_token` to Keycloak's backchannel endpoint
-- Keycloak session is fully terminated server-side — if the user navigates to Keycloak Admin, no active sessions exist
+The URL bar reads `dev.student.local:8080/login` — `idp.keycloak.com` never appears. React Router's `navigate("/login")` performs a SPA navigation with no page reload. Concurrently, the backend has already POST'd the `refresh_token` to Keycloak's backchannel endpoint, fully terminating the Keycloak session server-side. Navigating to the Keycloak Admin console confirms no active sessions remain.
 
 ---
 
@@ -715,30 +600,21 @@ automatic canary deployment via Argo Rollouts.
 
 ![Dev E2E Results](docs/screenshots/39-phase1-e2e-results.png)
 
-**What this shows:**
-- 45 Playwright tests pass against the live dev environment
-- The `user can log out` test passes with the new behaviour (URL check: `/login`)
-- Tests run against the real deployed stack: React → Nginx → FastAPI → PostgreSQL → Keycloak
-- Green gate: Phase 2 (PR preview) only starts after this passes
+All 45 Playwright tests pass against the live dev environment. The `user can log out` test passes with the new behaviour — URL check confirms `/login`. Tests exercise the complete stack: React → Nginx → FastAPI → PostgreSQL → Keycloak. This green gate authorises Phase 2 (PR preview) to begin.
 
 ---
 
 ### 12.2 Phase 2 — PR Preview: Ephemeral Env → E2E → Merge
 
-After dev passes, Jenkins opens a PR from `cicd` → `main`. The PR preview pipeline spins up
+After dev passes, Jenkins opens a PR from `cicd` → `main`. The PR preview pipeline provisions
 a **fully isolated Kubernetes environment** (`student-app-pr-N`) with its own database, Redis,
-and app instances — all from scratch. E2E tests run there before the PR is merged.
+and application instances — entirely from scratch. E2E tests run there before the PR is merged.
 
 #### GitHub Pull Request
 
 ![GitHub PR](docs/screenshots/40-phase2-github-pr.png)
 
-**What this shows:**
-- PR title: `feat: fix logout — backchannel Keycloak logout + redirect to /login`
-- Status: `Open` | Base: `main` | Head: `cicd`
-- Files changed: 4 (auth_routes.py, auth.ts, Navbar.tsx, auth.spec.ts)
-- `preview` label added by Jenkins → this label is what ArgoCD ApplicationSet watches
-- Check: `Jenkins · student-app-pr-preview` — E2E 45/45 Passed ✅
+The PR carries the title `feat: fix logout — backchannel Keycloak logout + redirect to /login`, with status `Open`, base `main`, head `cicd`, and 4 files changed: `auth_routes.py`, `auth.ts`, `Navbar.tsx`, `auth.spec.ts`. The `preview` label — added by Jenkins via the GitHub REST API — is the signal ArgoCD ApplicationSet monitors. The Jenkins check `student-app-pr-preview` shows E2E 45/45 Passed ✅.
 
 ---
 
@@ -746,7 +622,7 @@ and app instances — all from scratch. E2E tests run there before the PR is mer
 
 ![Jenkins PR Preview Pipeline](docs/screenshots/41-phase2-jenkins-preview-pipeline.png)
 
-**10 stages — the most complex pipeline:**
+Ten stages constitute the most complex pipeline in the system:
 
 | # | Stage | What Jenkins does |
 |---|-------|------------------|
@@ -761,7 +637,7 @@ and app instances — all from scratch. E2E tests run there before the PR is mer
 | 9 | **E2E Tests** | 45 Playwright tests against `pr-N.student.local:8080` |
 | 10 | **Merge PR** | `gh pr merge` → pushes to `main` → triggers production pipeline |
 
-The key innovation: each PR gets a **completely isolated environment** — the PR's code is tested against a real stack before it ever touches `main`.
+Each PR receives a **completely isolated environment** — the PR's code is tested against a real stack before it ever touches `main`.
 
 ---
 
@@ -769,11 +645,7 @@ The key innovation: each PR gets a **completely isolated environment** — the P
 
 ![ArgoCD PR Preview Apps](docs/screenshots/42-phase2-argocd-pr-app-list.png)
 
-**What this shows:**
-- ArgoCD ApplicationSet (PullRequest Generator) detects the `preview` label on the PR
-- Automatically creates `student-app-pr-N` Application and namespace — no manual steps
-- Application synced using the PR-specific image tag (`pr-N-<sha8>`)
-- Argo Rollouts canary strategy applied identically to the ephemeral environment
+The ArgoCD ApplicationSet (PullRequest Generator) detects the `preview` label on the PR and automatically creates the `student-app-pr-N` Application and namespace — no manual steps. The application syncs using the PR-specific image tag (`pr-N-<sha8>`), and the identical Argo Rollouts canary strategy applies to the ephemeral environment.
 
 ---
 
@@ -781,11 +653,7 @@ The key innovation: each PR gets a **completely isolated environment** — the P
 
 ![ArgoCD PR Preview Detail](docs/screenshots/43-phase2-argocd-pr-preview-detail.png)
 
-**What this shows:**
-- `student-app-pr-N` — Synced ✅ | Healthy ✅
-- Isolated namespace: separate PostgreSQL, Redis, FastAPI, and Frontend instances
-- Watches the PR branch directly — exact code being reviewed is what gets tested
-- When the PR closes, ArgoCD cascades prune: deletes all resources + the namespace (~30s)
+`student-app-pr-N` reports Synced ✅ | Healthy ✅. The isolated namespace contains its own PostgreSQL, Redis, FastAPI, and Frontend instances, all running the exact PR branch code under review. When the PR closes, ArgoCD cascades a prune operation that deletes all resources and the namespace in approximately 30 seconds.
 
 ---
 
@@ -793,19 +661,13 @@ The key innovation: each PR gets a **completely isolated environment** — the P
 
 ![PR Preview Dashboard](docs/screenshots/44-phase2-preview-app-dashboard.png)
 
-**What this shows:**
-- PR preview environment loaded at `pr-N.student.local:8080`
-- Admin user logged in — confirms auth flow works in the ephemeral environment
-- Ready to test the new logout behavior
+The PR preview environment loads at `pr-N.student.local:8080`. The admin user is authenticated, confirming the OAuth2.1 flow works correctly in the ephemeral environment. The application is ready for the logout behavior verification.
 
 ---
 
 ![PR Preview After Logout](docs/screenshots/45-phase2-preview-after-logout.png)
 
-**What this shows:**
-- After clicking Logout: URL shows `/login` within the preview domain — **no Keycloak redirect**
-- Confirms the backchannel logout works identically in the PR preview environment
-- This is the exact code that will go to production
+After clicking Logout, the URL remains within the preview domain — `/login` is appended but `idp.keycloak.com` never appears. The backchannel logout works identically in the ephemeral PR preview environment as it does in dev. This is the exact code that will be promoted to production.
 
 ---
 
@@ -813,11 +675,7 @@ The key innovation: each PR gets a **completely isolated environment** — the P
 
 ![PR Preview E2E](docs/screenshots/46-phase2-e2e-results.png)
 
-**What this shows:**
-- All 45 Playwright tests pass in the isolated PR preview environment
-- The `user can log out` test verifies the new backchannel logout behavior
-- **E2E gate passed** → Jenkins automatically merges the PR to `main`
-- No human approval needed — the test suite IS the gate
+All 45 Playwright tests pass in the isolated PR preview environment. The `user can log out` test verifies the new backchannel logout behaviour. With the E2E gate passed, Jenkins automatically merges the PR to `main` — no human approval is needed. The test suite is the gate.
 
 ---
 
@@ -831,7 +689,7 @@ directly to production. "Build once, deploy everywhere."
 
 ![Jenkins Prod Pipeline](docs/screenshots/47-phase3-jenkins-prod-pipeline.png)
 
-**6 stages — simplest pipeline (no rebuild):**
+Six stages — the simplest pipeline, no rebuild required:
 
 | # | Stage | What Jenkins does |
 |---|-------|------------------|
@@ -850,12 +708,7 @@ The image promoted to production is byte-for-byte identical to what ran in dev a
 
 ![ArgoCD Prod Syncing](docs/screenshots/48-phase3-argocd-prod-syncing.png)
 
-**What this shows:**
-- ArgoCD detects the new tag in the `prod` overlay on `main` branch
-- Argo Rollouts starts production canary: **50% of prod traffic** routes to new version
-- For 15 seconds, real production users hit the backchannel logout code
-- If health checks fail → **automatic rollback** to stable (old) version
-- No prod downtime — old pods kept alive until canary completes
+ArgoCD detects the new tag in the `prod` overlay on the `main` branch and starts a production canary: **50% of production traffic** routes to the new backchannel logout version. For 15 seconds, real production users are served by both old and new pods. If health checks fail, the rollout aborts automatically and all traffic reverts to the stable version. Old pods remain alive throughout — production downtime is zero.
 
 ---
 
@@ -863,11 +716,7 @@ The image promoted to production is byte-for-byte identical to what ran in dev a
 
 ![ArgoCD Prod Healthy](docs/screenshots/49-phase3-argocd-prod-healthy.png)
 
-**What this shows:**
-- Production: **Synced** ✅ | **Healthy** ✅
-- Rollout complete: 100% of production traffic now uses backchannel logout
-- Identical ArgoCD configuration as dev — same GitOps workflow, different overlay
-- Git is the single source of truth: `prod` overlay on `main` branch = what's in production
+Production advances to **Synced** ✅ | **Healthy** ✅. The rollout is complete: 100% of production traffic now uses the backchannel logout. The `prod` overlay on the `main` branch is the authoritative source of truth — what is in Git is what is running in the cluster.
 
 ---
 
@@ -875,10 +724,7 @@ The image promoted to production is byte-for-byte identical to what ran in dev a
 
 ![Prod Dashboard Logged In](docs/screenshots/50-phase3-prod-dashboard-logged-in.png)
 
-**What this shows:**
-- Production environment: `prod.student.local:8080`
-- Admin user authenticated — session backed by Redis in `student-app-prod` namespace
-- Same UI, same app, same Docker image — promoted from dev via GitOps
+The production environment at `prod.student.local:8080` accepts the admin login. The session is backed by Redis in the `student-app-prod` namespace. The UI is identical to dev — same Docker image, promoted via GitOps with no manual intervention.
 
 ---
 
@@ -886,11 +732,7 @@ The image promoted to production is byte-for-byte identical to what ran in dev a
 
 ![Prod After Logout](docs/screenshots/51-phase3-prod-after-logout.png)
 
-**What this shows:**
-- URL: `prod.student.local:8080/login` — user stayed within the production domain
-- No `idp.keycloak.com` URL ever appeared — the backchannel logout is invisible to the user
-- Keycloak session terminated server-side — confirmed clean logout
-- Feature is live in production ✅
+The URL reads `prod.student.local:8080/login` — the user remained entirely within the production domain throughout the logout flow. The backchannel logout is invisible to the user: Keycloak's session is terminated server-side via an `httpx` POST, and React Router handles the navigation to `/login`. The feature is live in production ✅.
 
 ---
 
@@ -898,11 +740,7 @@ The image promoted to production is byte-for-byte identical to what ran in dev a
 
 ![Prod E2E Results](docs/screenshots/52-phase3-e2e-results.png)
 
-**What this shows:**
-- 45 Playwright tests pass in production — same test suite, same assertions
-- The `user can log out` test passes: URL ends at `/login` without Keycloak redirect
-- This is the final automated gate confirming production is working correctly
-- Feature delivery complete: code change → dev → PR preview → production
+All 45 Playwright tests pass in production, confirming the complete stack is healthy following the canary deployment. The `user can log out` test passes: URL ends at `/login` without any Keycloak redirect. This is the final automated gate — feature delivery is complete.
 
 ---
 
@@ -912,12 +750,7 @@ The image promoted to production is byte-for-byte identical to what ran in dev a
 
 ![Final ArgoCD App List](docs/screenshots/53-final-all-apps-healthy.png)
 
-**What this shows:**
-- `student-app-dev` — Synced ✅ | Healthy ✅ | running backchannel logout
-- `student-app-prod` — Synced ✅ | Healthy ✅ | running backchannel logout
-- Both track the same image tag that passed all E2E gates
-- PR preview (`student-app-pr-N`) — automatically cleaned up after merge (~30s)
-- ArgoCD manages all three environments from one control plane
+The final ArgoCD application list confirms: `student-app-dev` (Synced ✅ | Healthy ✅) and `student-app-prod` (Synced ✅ | Healthy ✅), both running the backchannel logout image. The PR preview application (`student-app-pr-N`) was automatically pruned by ArgoCD within 30 seconds of PR closure. All three environments were managed from one control plane throughout the entire feature delivery.
 
 ---
 
@@ -925,10 +758,7 @@ The image promoted to production is byte-for-byte identical to what ran in dev a
 
 ![Final kubectl Rollouts](docs/screenshots/54-final-kubectl-rollouts-all.png)
 
-**What this shows:**
-- All `Rollout` resources across all namespaces: DESIRED=2, CURRENT=2, UP-TO-DATE=2, AVAILABLE=2
-- Both FastAPI and Frontend rollouts in both dev and prod — fully available
-- Argo Rollouts controller in `argo-rollouts` namespace managing canary state
+All `Rollout` resources across all namespaces report DESIRED=2, CURRENT=2, UP-TO-DATE=2, AVAILABLE=2. FastAPI and Frontend rollouts in both dev and prod are fully available. The Argo Rollouts controller in the `argo-rollouts` namespace managed all canary progressions without requiring any plugin or manual intervention.
 
 ---
 
@@ -988,7 +818,7 @@ Developer commits logout fix to cicd branch
 │  └─────────────────────────────────────┘                         │
 │            │                                                     │
 │            ▼  45 E2E tests on prod → ALL PASS ✅                 │
-│  Feature LIVE in production 🚀                                   │
+│  Feature LIVE in production                                      │
 └─────────────────────────────────────────────────────────────────┘
 ```
 
@@ -1005,249 +835,6 @@ Developer commits logout fix to cicd branch
 | Environments validated | 3 (dev, PR preview, prod) |
 | Production downtime | **Zero** |
 | Rollback capability | Git revert → ArgoCD auto-syncs |
-| Time from commit to prod | ~15 minutes (fully automated) |
-
----
-
-## Section 13: Logout Bug Fix — End-to-End Deployment
-
-This section documents the discovery, diagnosis, code fix, and full three-environment deployment of a logout bug in the Student Management System.
-
----
-
-### 13.1 Bug Report — What Was Broken
-
-**Symptom:** Clicking the Logout button left users stuck on the Keycloak identity provider page instead of returning to the application.
-
-**Affected environments:** All (dev, prod) — the deployed image `dev-2448ad6` contained the old logout implementation.
-
-**Root cause (confirmed by exec into prod pod):**
-
-The old logout endpoint (`POST /api/auth/logout`) returned a redirect URL pointing to Keycloak's front-channel logout page:
-
-```python
-# OLD CODE — broken
-logout_url = (
-    f"{settings.keycloak_url}/realms/{settings.keycloak_realm}"
-    f"/protocol/openid-connect/logout"
-    f"?post_logout_redirect_uri={settings.frontend_url}/login"
-    f"&id_token_hint={id_token}"
-)
-return {"logout_url": logout_url}
-```
-
-The `settings.frontend_url` inside the pod resolved to the cluster-internal value (e.g. `http://fastapi-app:8000`), not the Nginx-fronted URL the browser can reach. So Keycloak redirected back to an unreachable address — the user was stuck on `idp.keycloak.com`.
-
----
-
-### 13.2 The Fix — Backchannel Logout
-
-The fix replaced front-channel logout (browser redirect to Keycloak) with **backchannel logout** (server-to-server POST, invisible to the user):
-
-```python
-# NEW CODE — backchannel logout (commit 982b697)
-@router.post("/logout")
-async def logout(request: Request):
-    """Backchannel logout: silently terminate Keycloak session, clear local session."""
-    token_data = request.session.get("token", {})
-    refresh_token = token_data.get("refresh_token", "")
-
-    if refresh_token:
-        try:
-            async with httpx.AsyncClient(verify=False) as client:
-                await client.post(
-                    f"{settings.keycloak_url}/realms/{settings.keycloak_realm}"
-                    f"/protocol/openid-connect/logout",
-                    data={
-                        "client_id": settings.keycloak_client_id,
-                        "client_secret": settings.keycloak_client_secret,
-                        "refresh_token": refresh_token,
-                    },
-                )
-        except Exception:
-            pass  # Best-effort — clear session regardless
-
-    request.session.clear()
-    return {"redirect": "/"}   # ← Navigate to root; ProtectedRoute → /login
-```
-
-**Before/After flow comparison:**
-
-| Aspect | Before (broken) | After (fixed) |
-|--------|----------------|---------------|
-| Logout mechanism | Front-channel (browser visits Keycloak) | Backchannel (server-to-server POST) |
-| User sees | Keycloak logout page, then stuck | Nothing — seamless redirect |
-| Redirect target | `idp.keycloak.com/...?post_logout_redirect_uri=<broken>` | `navigate("/")` → ProtectedRoute → `/login` |
-| Keycloak session | Terminated (via id_token_hint) | Terminated (via refresh_token POST) |
-| URL in browser | `idp.keycloak.com` — user is stuck | Stays on app domain |
-
-**One-line additional fix (commit `5bc3bf4`):**
-
-```python
-# Change redirect target from "/login" to "/"
-# React Router ProtectedRoute handles the /login redirect automatically
-return {"redirect": "/"}
-```
-
----
-
-### 13.3 Phase 1 — Dev Environment Deployment
-
-**Image tag:** `dev-5bc3bf4`
-
-**Build & deploy:**
-- FastAPI image built from local `backend/` with the fix included
-- Frontend image rebuilt (nginx.conf unchanged, but consistent tagging)
-- Both pushed to local registry `localhost:5001`
-- Dev overlay `gitops/environments/overlays/dev/kustomization.yaml` updated → committed → pushed to `dev` branch
-
-**Argo Rollouts canary (dev):**
-- FastAPI: 50% canary → pause 15s → 100% → pause 10s → complete
-- Frontend: 50% canary → pause 10s → complete
-- ArgoCD tracked Rollout health natively (no plugin required)
-
-**ArgoCD sync output (dev):**
-```
-argoproj.io  Rollout  student-app-dev  fastapi-app   Synced  Progressing
-argoproj.io  Rollout  student-app-dev  frontend-app  Synced  Progressing
-...
-argoproj.io  Rollout  student-app-dev  fastapi-app   Synced  Healthy
-argoproj.io  Rollout  student-app-dev  frontend-app  Synced  Healthy
-```
-
-**E2E results (dev):**
-```
-Running 45 tests using 1 worker
-  45 passed (15.9s)
-```
-
-**Logout verification:**
-- Visit `http://dev.student.local:8080` → login as `admin-user`
-- Click Logout → URL changes to `dev.student.local:8080/login`
-- No `idp.keycloak.com` URL ever appears in the browser address bar ✅
-
-![Phase 1 — Dev Dashboard](docs/screenshots/65-p1-dev-dashboard.png)
-![Phase 1 — Dev After Logout](docs/screenshots/66-p1-dev-after-logout.png)
-![Phase 1 — E2E Results](docs/screenshots/67-p1-e2e-results.png)
-
----
-
-### 13.4 Phase 2 — PR Preview
-
-**PR:** #7 `[Auto] PR Preview Pipeline Test` (feature/auto-cicd-test → main)
-
-**Image tag:** `pr-7-72794915`
-
-**Pipeline steps:**
-1. Feature branch created from `dev`, test commit added
-2. PR opened on GitHub → `preview` label added via REST API
-3. ArgoCD ApplicationSet (PullRequest Generator) detected PR with `preview` label
-4. New namespace `student-app-pr-7` provisioned automatically
-5. `keycloak-tls` secret copied, DB seeded
-6. E2E tests run against `http://pr-7.student.local:8080`
-7. PR merged → PR closed → ArgoCD cascade pruned `student-app-pr-7` (~15s)
-
-**E2E results (PR preview):**
-```
-Running 45 tests using 1 worker
-  45 passed (17.1s)
-```
-
-**Logout verification (PR preview):**
-- Login to `http://pr-7.student.local:8080` → click Logout
-- Redirected to `pr-7.student.local:8080/login` — no Keycloak page ✅
-
-**ArgoCD ApplicationSet created ephemeral app:**
-```
-argocd/student-app-pr-7   Synced  Healthy  (auto-created by PullRequest Generator)
-```
-After PR closed → namespace deleted, Keycloak client `student-app-pr-7` removed.
-
-![Phase 2 — ArgoCD PR App](docs/screenshots/70-p2-argocd-pr-app.png)
-![Phase 2 — PR Preview Dashboard](docs/screenshots/71-p2-preview-dashboard.png)
-![Phase 2 — E2E Results](docs/screenshots/73-p2-e2e-results.png)
-
----
-
-### 13.5 Phase 3 — Production Promotion
-
-**Image tag:** `dev-5bc3bf4` (same as dev — no rebuild)
-
-**Promotion flow:**
-1. Dev image tag read from `gitops/environments/overlays/dev/kustomization.yaml`
-2. Prod overlay `gitops/environments/overlays/prod/kustomization.yaml` updated with same tag
-3. Committed → pushed to `main` branch
-4. ArgoCD detected change on `main` → triggered prod rollout
-5. Argo Rollouts canary: 50% new pods → 25s pause → 100% → complete
-
-**ArgoCD sync output (prod):**
-```
-argoproj.io  Rollout  student-app-prod  fastapi-app   Synced  Progressing
-argoproj.io  Rollout  student-app-prod  frontend-app  Synced  Progressing
-...
-argoproj.io  Rollout  student-app-prod  fastapi-app   Synced  Healthy
-argoproj.io  Rollout  student-app-prod  frontend-app  Synced  Healthy
-```
-
-**E2E results (prod):**
-```
-Running 45 tests using 1 worker
-  45 passed (16.7s)
-```
-
-**Logout verification (prod — bug FIXED):**
-- Visit `http://prod.student.local:8080` → login → click Logout
-- URL: `prod.student.local:8080/login` — stays on app domain ✅
-- **Keycloak session terminated** (backchannel POST confirms via Keycloak admin: no active session)
-
-![Phase 3 — ArgoCD Prod Healthy](docs/screenshots/76-p3-argocd-prod-healthy.png)
-![Phase 3 — Prod Dashboard](docs/screenshots/77-p3-prod-dashboard.png)
-![Phase 3 — Prod After Logout](docs/screenshots/78-p3-prod-after-logout.png)
-![Phase 3 — E2E Results](docs/screenshots/79-p3-e2e-results.png)
-
----
-
-### 13.6 Final State
-
-After all three phases, both environments run image `dev-5bc3bf4` with the logout fix:
-
-```
-argocd app list:
-NAME                     STATUS  HEALTH   TARGET
-argocd/student-app-dev   Synced  Healthy  dev    (dev-5bc3bf4)
-argocd/student-app-prod  Synced  Healthy  main   (dev-5bc3bf4)
-```
-
-```
-kubectl get rollouts -A:
-NAMESPACE         NAME          DESIRED  CURRENT  UP-TO-DATE  AVAILABLE
-student-app-dev   fastapi-app   2        2        2           2
-student-app-dev   frontend-app  2        2        2           2
-student-app-prod  fastapi-app   2        2        2           2
-student-app-prod  frontend-app  2        2        2           2
-```
-
-![Final — ArgoCD Apps](docs/screenshots/80-final-argocd-apps.png)
-![Final — Kubectl Rollouts](docs/screenshots/81-final-kubectl-rollouts.png)
-
----
-
-### 13.7 Summary
-
-| Metric | Value |
-|--------|-------|
-| Bug severity | High — users stuck on Keycloak page after logout |
-| Root cause | Front-channel logout with wrong `post_logout_redirect_uri` |
-| Fix | Backchannel logout via `httpx` POST to Keycloak `/logout` endpoint |
-| Code change | 1 file, ~20 lines replaced + 1 line redirect target (`/login` → `/`) |
-| Commit | `5bc3bf4` on `argo-rollout` branch |
-| Image tag | `dev-5bc3bf4` |
-| Pipeline stages | Phase 1: 6 stages + Phase 2: 10 stages + Phase 3: 6 stages = 22 total |
-| Docker builds | 2 (dev/preview) — prod reuses dev image |
-| Canary rollouts | 3 (dev + PR preview + prod) |
-| E2E tests run | 135 (45 × 3 environments) |
-| Human approvals | **0** |
-| Production downtime | **Zero** (canary rollout) |
 | Time from commit to prod | ~15 minutes (fully automated) |
 
 ---

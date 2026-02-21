@@ -47,7 +47,7 @@ export default function Navbar() {
             >
               {theme === 'light' ? '\u263E' : '\u2600'}
             </button>
-            <button className="btn btn-sm btn-outline" onClick={handleLogout}>
+            <button className="btn-logout" onClick={handleLogout}>
               Logout
             </button>
           </div>
