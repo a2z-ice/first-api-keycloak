@@ -1,0 +1,49 @@
+
+Running 45 tests using 1 worker
+
+[1A[2K[1/45] [chromium] › tests/e2e/auth.spec.ts:5:3 › Authentication › unauthenticated user is redirected to login page
+[1A[2K[2/45] [chromium] › tests/e2e/auth.spec.ts:11:3 › Authentication › admin can log in and see dashboard
+[1A[2K[3/45] [chromium] › tests/e2e/auth.spec.ts:17:3 › Authentication › student can log in and see dashboard
+[1A[2K[4/45] [chromium] › tests/e2e/auth.spec.ts:23:3 › Authentication › staff can log in and see dashboard
+[1A[2K[5/45] [chromium] › tests/e2e/auth.spec.ts:29:3 › Authentication › user can log out
+[1A[2K[6/45] [chromium] › tests/e2e/auth.spec.ts:39:3 › Authentication › session persists across navigations
+[1A[2K[7/45] [chromium] › tests/e2e/auth.spec.ts:52:3 › Authentication › session persists across multiple requests
+[1A[2K[8/45] [chromium] › tests/e2e/dark-mode.spec.ts:5:3 › Dark Mode › dark mode toggle works
+[1A[2K[9/45] [chromium] › tests/e2e/dark-mode.spec.ts:21:3 › Dark Mode › dark mode persists in localStorage
+[1A[2K[10/45] [chromium] › tests/e2e/dark-mode.spec.ts:38:3 › Dark Mode › dark mode applies correct CSS
+[1A[2K[11/45] [chromium] › tests/e2e/departments.spec.ts:5:3 › Department Role-Based Access › admin sees departments
+[1A[2K[12/45] [chromium] › tests/e2e/departments.spec.ts:11:3 › Department Role-Based Access › admin sees Add Department button
+[1A[2K[13/45] [chromium] › tests/e2e/departments.spec.ts:17:3 › Department Role-Based Access › staff sees departments
+[1A[2K[14/45] [chromium] › tests/e2e/departments.spec.ts:23:3 › Department Role-Based Access › staff does not see Add Department button
+[1A[2K[15/45] [chromium] › tests/e2e/departments.spec.ts:29:3 › Department Role-Based Access › student sees departments
+[1A[2K[16/45] [chromium] › tests/e2e/departments.spec.ts:35:3 › Department Role-Based Access › student does not see Add Department button
+[1A[2K[17/45] [chromium] › tests/e2e/departments.spec.ts:43:3 › Department CRUD › admin can create a department
+[1A[2K[18/45] [chromium] › tests/e2e/departments.spec.ts:55:3 › Department CRUD › admin can view department detail
+[1A[2K[19/45] [chromium] › tests/e2e/departments.spec.ts:62:3 › Department CRUD › admin can edit a department
+[1A[2K[20/45] [chromium] › tests/e2e/departments.spec.ts:81:3 › Department CRUD › staff cannot access department create form
+[1A[2K[21/45] [chromium] › tests/e2e/departments.spec.ts:87:3 › Department CRUD › student cannot access department create form
+[1A[2K[22/45] [chromium] › tests/e2e/errors.spec.ts:5:3 › Error Handling › nonexistent student shows error
+[1A[2K[23/45] [chromium] › tests/e2e/errors.spec.ts:11:3 › Error Handling › nonexistent department shows error
+[1A[2K[24/45] [chromium] › tests/e2e/errors.spec.ts:17:3 › Error Handling › student cannot access other student record
+[1A[2K[25/45] [chromium] › tests/e2e/navigation.spec.ts:5:3 › Navigation › navbar has Home, Students, Departments links
+[1A[2K[26/45] [chromium] › tests/e2e/navigation.spec.ts:12:3 › Navigation › dashboard has Students and Departments cards
+[1A[2K[27/45] [chromium] › tests/e2e/navigation.spec.ts:18:3 › Navigation › student list to detail navigation
+[1A[2K[28/45] [chromium] › tests/e2e/navigation.spec.ts:25:3 › Navigation › department list to detail navigation
+[1A[2K[29/45] [chromium] › tests/e2e/students.spec.ts:5:3 › Student Role-Based Access › admin sees all students
+[1A[2K[30/45] [chromium] › tests/e2e/students.spec.ts:14:3 › Student Role-Based Access › admin sees Add Student button
+[1A[2K[31/45] [chromium] › tests/e2e/students.spec.ts:20:3 › Student Role-Based Access › admin sees Edit buttons
+[1A[2K[32/45] [chromium] › tests/e2e/students.spec.ts:27:3 › Student Role-Based Access › staff sees all students
+[1A[2K[33/45] [chromium] › tests/e2e/students.spec.ts:35:3 › Student Role-Based Access › staff does not see Add Student button
+[1A[2K[34/45] [chromium] › tests/e2e/students.spec.ts:41:3 › Student Role-Based Access › staff does not see Edit buttons
+[1A[2K[35/45] [chromium] › tests/e2e/students.spec.ts:47:3 › Student Role-Based Access › student sees only own record
+[1A[2K[36/45] [chromium] › tests/e2e/students.spec.ts:55:3 › Student Role-Based Access › student does not see Add Student button
+[1A[2K[37/45] [chromium] › tests/e2e/students.spec.ts:61:3 › Student Role-Based Access › student does not see Edit buttons
+[1A[2K[38/45] [chromium] › tests/e2e/students.spec.ts:69:3 › Student CRUD › admin can create a student
+[1A[2K[39/45] [chromium] › tests/e2e/students.spec.ts:81:3 › Student CRUD › admin can view student detail
+[1A[2K[40/45] [chromium] › tests/e2e/students.spec.ts:89:3 › Student CRUD › admin can edit a student
+[1A[2K[41/45] [chromium] › tests/e2e/students.spec.ts:108:3 › Student CRUD › staff cannot access student create form
+[1A[2K[42/45] [chromium] › tests/e2e/students.spec.ts:114:3 › Student CRUD › student cannot access student create form
+[1A[2K[43/45] [chromium] › tests/e2e/validation.spec.ts:5:3 › Form Validation › student form requires name
+[1A[2K[44/45] [chromium] › tests/e2e/validation.spec.ts:14:3 › Form Validation › student form requires email
+[1A[2K[45/45] [chromium] › tests/e2e/validation.spec.ts:22:3 › Form Validation › department form requires name
+[1A[2K  45 passed (16.1s)
