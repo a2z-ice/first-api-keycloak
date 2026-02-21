@@ -101,4 +101,4 @@ async def logout(request: Request):
             pass  # Best-effort — clear session regardless
 
     request.session.clear()
-    return {"redirect": "/login"}
+    return {"redirect": "/"}
