@@ -1009,4 +1009,247 @@ Developer commits logout fix to cicd branch
 
 ---
 
-*Generated: February 20, 2026 | Branch: `argo-rollout` | Commit: `e390745`*
+## Section 13: Logout Bug Fix — End-to-End Deployment
+
+This section documents the discovery, diagnosis, code fix, and full three-environment deployment of a logout bug in the Student Management System.
+
+---
+
+### 13.1 Bug Report — What Was Broken
+
+**Symptom:** Clicking the Logout button left users stuck on the Keycloak identity provider page instead of returning to the application.
+
+**Affected environments:** All (dev, prod) — the deployed image `dev-2448ad6` contained the old logout implementation.
+
+**Root cause (confirmed by exec into prod pod):**
+
+The old logout endpoint (`POST /api/auth/logout`) returned a redirect URL pointing to Keycloak's front-channel logout page:
+
+```python
+# OLD CODE — broken
+logout_url = (
+    f"{settings.keycloak_url}/realms/{settings.keycloak_realm}"
+    f"/protocol/openid-connect/logout"
+    f"?post_logout_redirect_uri={settings.frontend_url}/login"
+    f"&id_token_hint={id_token}"
+)
+return {"logout_url": logout_url}
+```
+
+The `settings.frontend_url` inside the pod resolved to the cluster-internal value (e.g. `http://fastapi-app:8000`), not the Nginx-fronted URL the browser can reach. So Keycloak redirected back to an unreachable address — the user was stuck on `idp.keycloak.com`.
+
+---
+
+### 13.2 The Fix — Backchannel Logout
+
+The fix replaced front-channel logout (browser redirect to Keycloak) with **backchannel logout** (server-to-server POST, invisible to the user):
+
+```python
+# NEW CODE — backchannel logout (commit 982b697)
+@router.post("/logout")
+async def logout(request: Request):
+    """Backchannel logout: silently terminate Keycloak session, clear local session."""
+    token_data = request.session.get("token", {})
+    refresh_token = token_data.get("refresh_token", "")
+
+    if refresh_token:
+        try:
+            async with httpx.AsyncClient(verify=False) as client:
+                await client.post(
+                    f"{settings.keycloak_url}/realms/{settings.keycloak_realm}"
+                    f"/protocol/openid-connect/logout",
+                    data={
+                        "client_id": settings.keycloak_client_id,
+                        "client_secret": settings.keycloak_client_secret,
+                        "refresh_token": refresh_token,
+                    },
+                )
+        except Exception:
+            pass  # Best-effort — clear session regardless
+
+    request.session.clear()
+    return {"redirect": "/"}   # ← Navigate to root; ProtectedRoute → /login
+```
+
+**Before/After flow comparison:**
+
+| Aspect | Before (broken) | After (fixed) |
+|--------|----------------|---------------|
+| Logout mechanism | Front-channel (browser visits Keycloak) | Backchannel (server-to-server POST) |
+| User sees | Keycloak logout page, then stuck | Nothing — seamless redirect |
+| Redirect target | `idp.keycloak.com/...?post_logout_redirect_uri=<broken>` | `navigate("/")` → ProtectedRoute → `/login` |
+| Keycloak session | Terminated (via id_token_hint) | Terminated (via refresh_token POST) |
+| URL in browser | `idp.keycloak.com` — user is stuck | Stays on app domain |
+
+**One-line additional fix (commit `5bc3bf4`):**
+
+```python
+# Change redirect target from "/login" to "/"
+# React Router ProtectedRoute handles the /login redirect automatically
+return {"redirect": "/"}
+```
+
+---
+
+### 13.3 Phase 1 — Dev Environment Deployment
+
+**Image tag:** `dev-5bc3bf4`
+
+**Build & deploy:**
+- FastAPI image built from local `backend/` with the fix included
+- Frontend image rebuilt (nginx.conf unchanged, but consistent tagging)
+- Both pushed to local registry `localhost:5001`
+- Dev overlay `gitops/environments/overlays/dev/kustomization.yaml` updated → committed → pushed to `dev` branch
+
+**Argo Rollouts canary (dev):**
+- FastAPI: 50% canary → pause 15s → 100% → pause 10s → complete
+- Frontend: 50% canary → pause 10s → complete
+- ArgoCD tracked Rollout health natively (no plugin required)
+
+**ArgoCD sync output (dev):**
+```
+argoproj.io  Rollout  student-app-dev  fastapi-app   Synced  Progressing
+argoproj.io  Rollout  student-app-dev  frontend-app  Synced  Progressing
+...
+argoproj.io  Rollout  student-app-dev  fastapi-app   Synced  Healthy
+argoproj.io  Rollout  student-app-dev  frontend-app  Synced  Healthy
+```
+
+**E2E results (dev):**
+```
+Running 45 tests using 1 worker
+  45 passed (15.9s)
+```
+
+**Logout verification:**
+- Visit `http://dev.student.local:8080` → login as `admin-user`
+- Click Logout → URL changes to `dev.student.local:8080/login`
+- No `idp.keycloak.com` URL ever appears in the browser address bar ✅
+
+![Phase 1 — Dev Dashboard](docs/screenshots/65-p1-dev-dashboard.png)
+![Phase 1 — Dev After Logout](docs/screenshots/66-p1-dev-after-logout.png)
+![Phase 1 — E2E Results](docs/screenshots/67-p1-e2e-results.png)
+
+---
+
+### 13.4 Phase 2 — PR Preview
+
+**PR:** #7 `[Auto] PR Preview Pipeline Test` (feature/auto-cicd-test → main)
+
+**Image tag:** `pr-7-72794915`
+
+**Pipeline steps:**
+1. Feature branch created from `dev`, test commit added
+2. PR opened on GitHub → `preview` label added via REST API
+3. ArgoCD ApplicationSet (PullRequest Generator) detected PR with `preview` label
+4. New namespace `student-app-pr-7` provisioned automatically
+5. `keycloak-tls` secret copied, DB seeded
+6. E2E tests run against `http://pr-7.student.local:8080`
+7. PR merged → PR closed → ArgoCD cascade pruned `student-app-pr-7` (~15s)
+
+**E2E results (PR preview):**
+```
+Running 45 tests using 1 worker
+  45 passed (17.1s)
+```
+
+**Logout verification (PR preview):**
+- Login to `http://pr-7.student.local:8080` → click Logout
+- Redirected to `pr-7.student.local:8080/login` — no Keycloak page ✅
+
+**ArgoCD ApplicationSet created ephemeral app:**
+```
+argocd/student-app-pr-7   Synced  Healthy  (auto-created by PullRequest Generator)
+```
+After PR closed → namespace deleted, Keycloak client `student-app-pr-7` removed.
+
+![Phase 2 — ArgoCD PR App](docs/screenshots/70-p2-argocd-pr-app.png)
+![Phase 2 — PR Preview Dashboard](docs/screenshots/71-p2-preview-dashboard.png)
+![Phase 2 — E2E Results](docs/screenshots/73-p2-e2e-results.png)
+
+---
+
+### 13.5 Phase 3 — Production Promotion
+
+**Image tag:** `dev-5bc3bf4` (same as dev — no rebuild)
+
+**Promotion flow:**
+1. Dev image tag read from `gitops/environments/overlays/dev/kustomization.yaml`
+2. Prod overlay `gitops/environments/overlays/prod/kustomization.yaml` updated with same tag
+3. Committed → pushed to `main` branch
+4. ArgoCD detected change on `main` → triggered prod rollout
+5. Argo Rollouts canary: 50% new pods → 25s pause → 100% → complete
+
+**ArgoCD sync output (prod):**
+```
+argoproj.io  Rollout  student-app-prod  fastapi-app   Synced  Progressing
+argoproj.io  Rollout  student-app-prod  frontend-app  Synced  Progressing
+...
+argoproj.io  Rollout  student-app-prod  fastapi-app   Synced  Healthy
+argoproj.io  Rollout  student-app-prod  frontend-app  Synced  Healthy
+```
+
+**E2E results (prod):**
+```
+Running 45 tests using 1 worker
+  45 passed (16.7s)
+```
+
+**Logout verification (prod — bug FIXED):**
+- Visit `http://prod.student.local:8080` → login → click Logout
+- URL: `prod.student.local:8080/login` — stays on app domain ✅
+- **Keycloak session terminated** (backchannel POST confirms via Keycloak admin: no active session)
+
+![Phase 3 — ArgoCD Prod Healthy](docs/screenshots/76-p3-argocd-prod-healthy.png)
+![Phase 3 — Prod Dashboard](docs/screenshots/77-p3-prod-dashboard.png)
+![Phase 3 — Prod After Logout](docs/screenshots/78-p3-prod-after-logout.png)
+![Phase 3 — E2E Results](docs/screenshots/79-p3-e2e-results.png)
+
+---
+
+### 13.6 Final State
+
+After all three phases, both environments run image `dev-5bc3bf4` with the logout fix:
+
+```
+argocd app list:
+NAME                     STATUS  HEALTH   TARGET
+argocd/student-app-dev   Synced  Healthy  dev    (dev-5bc3bf4)
+argocd/student-app-prod  Synced  Healthy  main   (dev-5bc3bf4)
+```
+
+```
+kubectl get rollouts -A:
+NAMESPACE         NAME          DESIRED  CURRENT  UP-TO-DATE  AVAILABLE
+student-app-dev   fastapi-app   2        2        2           2
+student-app-dev   frontend-app  2        2        2           2
+student-app-prod  fastapi-app   2        2        2           2
+student-app-prod  frontend-app  2        2        2           2
+```
+
+![Final — ArgoCD Apps](docs/screenshots/80-final-argocd-apps.png)
+![Final — Kubectl Rollouts](docs/screenshots/81-final-kubectl-rollouts.png)
+
+---
+
+### 13.7 Summary
+
+| Metric | Value |
+|--------|-------|
+| Bug severity | High — users stuck on Keycloak page after logout |
+| Root cause | Front-channel logout with wrong `post_logout_redirect_uri` |
+| Fix | Backchannel logout via `httpx` POST to Keycloak `/logout` endpoint |
+| Code change | 1 file, ~20 lines replaced + 1 line redirect target (`/login` → `/`) |
+| Commit | `5bc3bf4` on `argo-rollout` branch |
+| Image tag | `dev-5bc3bf4` |
+| Pipeline stages | Phase 1: 6 stages + Phase 2: 10 stages + Phase 3: 6 stages = 22 total |
+| Docker builds | 2 (dev/preview) — prod reuses dev image |
+| Canary rollouts | 3 (dev + PR preview + prod) |
+| E2E tests run | 135 (45 × 3 environments) |
+| Human approvals | **0** |
+| Production downtime | **Zero** (canary rollout) |
+| Time from commit to prod | ~15 minutes (fully automated) |
+
+---
+
+*Updated: February 20, 2026 | Branch: `argo-rollout` | Commit: `5bc3bf4`*
