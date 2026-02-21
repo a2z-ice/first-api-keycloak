@@ -5,8 +5,8 @@ export async function getMe(): Promise<User> {
   return apiFetch<User>('/api/auth/me');
 }
 
-export async function logout(): Promise<{ logout_url: string }> {
-  return apiFetch<{ logout_url: string }>('/api/auth/logout', {
+export async function logout(): Promise<{ redirect: string }> {
+  return apiFetch<{ redirect: string }>('/api/auth/logout', {
     method: 'POST',
   });
 }
